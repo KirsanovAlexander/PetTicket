@@ -1,0 +1,416 @@
+{
+  "id": null,
+  "uid": "pet-ticket-overview",
+  "title": "Pet Ticket - Application Overview",
+  "tags": ["pet-ticket", "monitoring"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "30s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "type": "graph",
+      "title": "Memory Usage",
+      "targets": [
+        {
+          "expr": "memory_usage_bytes",
+          "legendFormat": "System Memory",
+          "refId": "A"
+        },
+        {
+          "expr": "memory_alloc_bytes",
+          "legendFormat": "Allocated Memory",
+          "refId": "B"
+        }
+      ],
+      "yaxes": [
+        {"format": "bytes", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 2,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "type": "graph",
+      "title": "Database Connections",
+      "targets": [
+        {
+          "expr": "db_connections_open",
+          "legendFormat": "Open",
+          "refId": "A"
+        },
+        {
+          "expr": "db_connections_in_use",
+          "legendFormat": "In Use",
+          "refId": "B"
+        },
+        {
+          "expr": "db_connections_idle",
+          "legendFormat": "Idle",
+          "refId": "C"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 3,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "type": "graph",
+      "title": "Goroutines",
+      "targets": [
+        {
+          "expr": "goroutines_count",
+          "legendFormat": "Custom Metric",
+          "refId": "A"
+        },
+        {
+          "expr": "go_goroutines",
+          "legendFormat": "Go Runtime",
+          "refId": "B"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 4,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "type": "graph",
+      "title": "HTTP Requests Rate",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total[5m])",
+          "legendFormat": "{{method}} {{path}} {{status}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "reqps", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 5,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "type": "graph",
+      "title": "HTTP Requests In Flight",
+      "targets": [
+        {
+          "expr": "http_requests_in_flight",
+          "legendFormat": "Requests",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 6,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "type": "graph",
+      "title": "HTTP Request Duration (p95)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "{{method}} {{path}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "s", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 7,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "type": "graph",
+      "title": "DB Connection Wait Time",
+      "targets": [
+        {
+          "expr": "db_connections_wait_duration_seconds",
+          "legendFormat": "Wait Duration",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "s", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 8,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "type": "graph",
+      "title": "DB Connection Wait Count",
+      "targets": [
+        {
+          "expr": "db_connections_wait_count",
+          "legendFormat": "Wait Count",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 9,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "type": "graph",
+      "title": "DB Connections Closed",
+      "targets": [
+        {
+          "expr": "db_connections_max_idle_closed",
+          "legendFormat": "Max Idle Closed",
+          "refId": "A"
+        },
+        {
+          "expr": "db_connections_max_lifetime_closed",
+          "legendFormat": "Max Lifetime Closed",
+          "refId": "B"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 10,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "type": "graph",
+      "title": "Go Memory Stats",
+      "targets": [
+        {
+          "expr": "go_memstats_heap_alloc_bytes",
+          "legendFormat": "Heap Alloc",
+          "refId": "A"
+        },
+        {
+          "expr": "go_memstats_heap_inuse_bytes",
+          "legendFormat": "Heap In Use",
+          "refId": "B"
+        },
+        {
+          "expr": "go_memstats_heap_idle_bytes",
+          "legendFormat": "Heap Idle",
+          "refId": "C"
+        }
+      ],
+      "yaxes": [
+        {"format": "bytes", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 11,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "type": "graph",
+      "title": "GC Duration",
+      "targets": [
+        {
+          "expr": "rate(go_gc_duration_seconds_sum[5m])",
+          "legendFormat": "GC Duration",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "s", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 12,
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 32},
+      "type": "stat",
+      "title": "Total HTTP Requests",
+      "targets": [
+        {
+          "expr": "sum(http_requests_total)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 13,
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 32},
+      "type": "stat",
+      "title": "Open DB Connections",
+      "targets": [
+        {
+          "expr": "db_connections_open",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 14,
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 32},
+      "type": "stat",
+      "title": "Current Goroutines",
+      "targets": [
+        {
+          "expr": "goroutines_count",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 15,
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 32},
+      "type": "stat",
+      "title": "Memory Usage (MB)",
+      "targets": [
+        {
+          "expr": "memory_usage_bytes / 1024 / 1024",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 16,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+      "type": "graph",
+      "title": "HTTP Request Duration Percentiles",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p90",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p99",
+          "refId": "D"
+        }
+      ],
+      "yaxes": [
+        {"format": "s", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    },
+    {
+      "id": 17,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+      "type": "graph",
+      "title": "Go Threads",
+      "targets": [
+        {
+          "expr": "go_threads",
+          "legendFormat": "Threads",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "show": true},
+        {"format": "short", "show": true}
+      ],
+      "xaxis": {"show": true},
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2,
+      "legend": {"show": true}
+    }
+  ]
+}

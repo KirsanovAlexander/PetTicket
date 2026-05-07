@@ -1,0 +1,243 @@
+{
+	"info": {
+		"_postman_id": "pet-ticket-api",
+		"name": "Pet Ticket API",
+		"description": "API коллекция для pet-ticket сервиса",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Healthcheck",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/healthcheck",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "healthcheck"]
+				},
+				"description": "Проверка работоспособности сервиса"
+			},
+			"response": []
+		},
+		{
+			"name": "Statuses",
+			"item": [
+				{
+					"name": "List Statuses",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/statuses",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "statuses"]
+						},
+						"description": "Получить список всех статусов тикетов"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Topics",
+			"item": [
+				{
+					"name": "List Topics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/topics",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "topics"]
+						},
+						"description": "Получить список всех тем тикетов"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Tickets",
+			"item": [
+				{
+					"name": "POST Create Ticket",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": 1,\n  \"topicId\": 1,\n  \"amount\": 100.50,\n  \"comment\": \"Не пришло пополнение на сумму 100.50\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets"]
+						},
+						"description": "Создать новый тикет"
+					},
+					"response": []
+				},
+				{
+					"name": "GET Get Ticket",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets/{{ticketId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets", "{{ticketId}}"]
+						},
+						"description": "Получить тикет по ID"
+					},
+					"response": []
+				},
+				{
+					"name": "PUT Update Ticket",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"statusId\": 2,\n  \"comment\": \"Тикет взят в работу\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets/{{ticketId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets", "{{ticketId}}"]
+						},
+						"description": "Обновить тикет"
+					},
+					"response": []
+				},
+				{
+					"name": "GET List Tickets",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets?limit=20&offset=0",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "20",
+									"description": "Количество записей"
+								},
+								{
+									"key": "offset",
+									"value": "0",
+									"description": "Смещение"
+								},
+								{
+									"key": "userId",
+									"value": "1",
+									"description": "Фильтр по userId",
+									"disabled": true
+								},
+								{
+									"key": "topicId",
+									"value": "1",
+									"description": "Фильтр по topicId",
+									"disabled": true
+								},
+								{
+									"key": "statusId",
+									"value": "1",
+									"description": "Фильтр по statusId",
+									"disabled": true
+								}
+							]
+						},
+						"description": "Получить список тикетов с фильтрацией"
+					},
+					"response": []
+				},
+				{
+					"name": "GET Get Ticket History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets/{{ticketId}}/history",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets", "{{ticketId}}", "history"]
+						},
+						"description": "Получить историю изменений тикета"
+					},
+					"response": []
+				},
+				{
+					"name": "POST Assign Ticket",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"operatorId\": 5,\n  \"comment\": \"Назначено на оператора\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets/{{ticketId}}/assign",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets", "{{ticketId}}", "assign"]
+						},
+						"description": "Назначить тикет на оператора"
+					},
+					"response": []
+				},
+				{
+					"name": "POST Escalate Ticket",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"reason\": \"Клиент недоволен сроком решения\",\n  \"priority\": 2\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/tickets/{{ticketId}}/escalate",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "tickets", "{{ticketId}}", "escalate"]
+						},
+						"description": "Эскалировать тикет (priority: 1=низкий, 2=средний, 3=высокий)"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:9000",
+			"type": "string"
+		},
+		{
+			"key": "ticketId",
+			"value": "1",
+			"type": "string"
+		}
+	]
+}

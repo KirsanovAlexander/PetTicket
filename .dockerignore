@@ -1,0 +1,60 @@
+# Git
+.git
+.gitignore
+
+# Environment
+.env
+.env.example
+
+# Documentation
+README.md
+QUICKSTART.md
+STATUS_REPORT.md
+TODO_TASKS.md
+SUMMARY.md
+P0_COMPLETED.md
+P1_COMPLETED.md
+FINAL_SUMMARY.md
+ARCHITECTURE.md
+DEPLOYMENT.md
+LINTER.md
+AGENTS.md
+
+# Development files
+examples.http
+postman_collection.json
+Makefile
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Build artifacts
+bin/
+
+# IDE
+.idea/
+.vscode/
+
+# OS files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test files
+*_test.go
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
