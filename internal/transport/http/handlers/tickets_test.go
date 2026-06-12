@@ -27,6 +27,8 @@ type mockTicketsService struct {
 	getTicketHistoryFunc func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
 	getAllStatusesFunc   func(ctx context.Context) ([]tickets.StatusInfo, error)
 	getAllTopicsFunc     func(ctx context.Context) ([]domain.Topic, error)
+	updatePriorityFunc   func(ctx context.Context, ticketID int64, priority domain.Priority, userID int64) (domain.Ticket, error)
+	escalateTicketFunc   func(ctx context.Context, ticketID int64, userID int64) (domain.Ticket, error)
 }
 
 func (m *mockTicketsService) CreateTicket(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error) {
@@ -83,6 +85,20 @@ func (m *mockTicketsService) GetAllTopics(ctx context.Context) ([]domain.Topic, 
 		return m.getAllTopicsFunc(ctx)
 	}
 	return nil, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) UpdatePriority(ctx context.Context, ticketID int64, priority domain.Priority, userID int64) (domain.Ticket, error) {
+	if m.updatePriorityFunc != nil {
+		return m.updatePriorityFunc(ctx, ticketID, priority, userID)
+	}
+	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) EscalateTicket(ctx context.Context, ticketID int64, userID int64) (domain.Ticket, error) {
+	if m.escalateTicketFunc != nil {
+		return m.escalateTicketFunc(ctx, ticketID, userID)
+	}
+	return domain.Ticket{}, errors.New("not implemented")
 }
 
 // TestGetTicket_Success — успешное получение тикета через HTTP

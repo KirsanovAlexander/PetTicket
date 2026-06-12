@@ -11,6 +11,7 @@ type Ticket struct {
 	UserID    int64
 	TopicID   int64
 	Status    Status
+	Priority  Priority
 	Amount    *float64
 	Comment   string
 	CreatedAt time.Time
@@ -27,6 +28,9 @@ func (t Ticket) Validate() error {
 	}
 	if !t.Status.IsValid() {
 		return errors.New("invalid status")
+	}
+	if !t.Priority.IsValid() {
+		return errors.New("invalid priority")
 	}
 	if t.Amount != nil && *t.Amount < 0 {
 		return errors.New("amount cannot be negative")

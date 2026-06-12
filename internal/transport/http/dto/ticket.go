@@ -27,9 +27,11 @@ type TicketResponse struct {
 	UserID     int64     `json:"userId"`
 	TopicID    int64     `json:"topicId"`
 	TopicName  string    `json:"topicName,omitempty"`
-	StatusID   int       `json:"statusId"`
-	StatusName string    `json:"statusName,omitempty"`
-	Amount     *float64  `json:"amount,omitempty"`
+	StatusID     int       `json:"statusId"`
+	StatusName   string    `json:"statusName,omitempty"`
+	PriorityID   int       `json:"priorityId"`
+	PriorityName string    `json:"priorityName,omitempty"`
+	Amount       *float64  `json:"amount,omitempty"`
 	Comment    string    `json:"comment"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
@@ -84,9 +86,11 @@ func ToTicketResponse(ticket domain.Ticket) TicketResponse {
 		ID:         ticket.ID,
 		UserID:     ticket.UserID,
 		TopicID:    ticket.TopicID,
-		StatusID:   int(ticket.Status),
-		StatusName: ticket.Status.String(),
-		Amount:     ticket.Amount,
+		StatusID:     int(ticket.Status),
+		StatusName:   ticket.Status.String(),
+		PriorityID:   int(ticket.Priority),
+		PriorityName: ticket.Priority.String(),
+		Amount:       ticket.Amount,
 		Comment:    ticket.Comment,
 		CreatedAt:  ticket.CreatedAt,
 		UpdatedAt:  ticket.UpdatedAt,

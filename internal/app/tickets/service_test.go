@@ -125,11 +125,12 @@ func (m *mockTx) Rollback() error {
 func TestGetTicket_Success(t *testing.T) {
 	// Arrange
 	expectedTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Test ticket",
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "Test ticket",
 	}
 
 	repo := &mockRepository{
@@ -234,6 +235,9 @@ func TestCreateTicket_Success(t *testing.T) {
 	if capturedTicket.UserID != 100 {
 		t.Errorf("expected captured user ID 100, got %d", capturedTicket.UserID)
 	}
+	if capturedTicket.Priority != domain.PriorityMedium {
+		t.Errorf("expected default priority medium, got %s", capturedTicket.Priority.String())
+	}
 	if capturedHistory.Action != domain.ActionCreated {
 		t.Errorf("expected history action 'created', got %s", capturedHistory.Action)
 	}
@@ -289,11 +293,12 @@ func TestCreateTicket_InvalidInput(t *testing.T) {
 func TestUpdateTicket_StatusChange(t *testing.T) {
 	// Arrange
 	existingTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Original comment",
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "Original comment",
 	}
 
 	var capturedHistory domain.History
@@ -360,11 +365,12 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 func TestUpdateTicket_TransactionRollback(t *testing.T) {
 	// Arrange
 	existingTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Original",
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "Original",
 	}
 
 	rolledBack := false
@@ -410,6 +416,155 @@ func TestUpdateTicket_TransactionRollback(t *testing.T) {
 	}
 	if !rolledBack {
 		t.Error("expected transaction to be rolled back")
+	}
+}
+
+// TestCreateTicket_WithPriority — создание тикета с указанным приоритетом
+func TestCreateTicket_WithPriority(t *testing.T) {
+	var capturedTicket domain.Ticket
+
+	repo := &mockRepository{
+		createFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			capturedTicket = ticket
+			ticket.ID = 1
+			return ticket, nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			return nil
+		},
+	}
+
+	svc := NewService(repo, &mockDB{}, testLogger())
+	priority := domain.PriorityHigh
+
+	_, err := svc.CreateTicket(context.Background(), CreateTicketInput{
+		UserID:   1,
+		TopicID:  1,
+		Priority: &priority,
+		Comment:  "High priority ticket",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if capturedTicket.Priority != domain.PriorityHigh {
+		t.Errorf("expected priority high, got %s", capturedTicket.Priority.String())
+	}
+}
+
+// TestUpdatePriority_Success — изменение приоритета с записью в историю
+func TestUpdatePriority_Success(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityLow,
+		Comment:  "Test ticket",
+	}
+
+	var capturedHistory domain.History
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) {
+			return existingTicket, nil
+		},
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			return ticket, nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			capturedHistory = history
+			return nil
+		},
+	}
+
+	svc := NewService(repo, &mockDB{}, testLogger())
+
+	updated, err := svc.UpdatePriority(context.Background(), 1, domain.PriorityHigh, 100)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if updated.Priority != domain.PriorityHigh {
+		t.Errorf("expected priority high, got %s", updated.Priority.String())
+	}
+	if capturedHistory.Action != domain.ActionPriorityChanged {
+		t.Errorf("expected action priority_changed, got %s", capturedHistory.Action)
+	}
+	if capturedHistory.OldValue != "low" || capturedHistory.NewValue != "high" {
+		t.Errorf("unexpected history values: %s -> %s", capturedHistory.OldValue, capturedHistory.NewValue)
+	}
+}
+
+// TestEscalateTicket_Success — эскалация повышает приоритет
+func TestEscalateTicket_Success(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "Test ticket",
+	}
+
+	var capturedHistory domain.History
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) {
+			return existingTicket, nil
+		},
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			return ticket, nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			capturedHistory = history
+			return nil
+		},
+	}
+
+	svc := NewService(repo, &mockDB{}, testLogger())
+
+	updated, err := svc.EscalateTicket(context.Background(), 1, 100)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if updated.Priority != domain.PriorityHigh {
+		t.Errorf("expected priority high after escalation, got %s", updated.Priority.String())
+	}
+	if capturedHistory.Action != domain.ActionEscalated {
+		t.Errorf("expected action escalated, got %s", capturedHistory.Action)
+	}
+}
+
+// TestEscalateTicket_MaxPriority — эскалация на максимальном приоритете не меняет тикет
+func TestEscalateTicket_MaxPriority(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityCritical,
+		Comment:  "Critical ticket",
+	}
+
+	updateCalled := false
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) {
+			return existingTicket, nil
+		},
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			updateCalled = true
+			return ticket, nil
+		},
+	}
+
+	svc := NewService(repo, &mockDB{}, testLogger())
+
+	updated, err := svc.EscalateTicket(context.Background(), 1, 100)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if updated.Priority != domain.PriorityCritical {
+		t.Errorf("expected priority critical, got %s", updated.Priority.String())
+	}
+	if updateCalled {
+		t.Error("expected no update when priority is already critical")
 	}
 }
 

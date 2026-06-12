@@ -13,10 +13,11 @@ import (
 
 // CreateTicketRequest запрос на создание тикета
 type CreateTicketRequest struct {
-	UserID  int64    `json:"userId" validate:"required,gte=1"`
-	TopicID int64    `json:"topicId" validate:"required,gte=1"`
-	Amount  *float64 `json:"amount,omitempty" validate:"omitempty,gte=0"`
-	Comment string   `json:"comment" validate:"required,min=10,max=2000"`
+	UserID     int64    `json:"userId" validate:"required,gte=1"`
+	TopicID    int64    `json:"topicId" validate:"required,gte=1"`
+	PriorityID *int     `json:"priorityId,omitempty" validate:"omitempty,gte=1,lte=4"`
+	Amount     *float64 `json:"amount,omitempty" validate:"omitempty,gte=0"`
+	Comment    string   `json:"comment" validate:"required,min=10,max=2000"`
 }
 
 // UpdateTicketRequest запрос на обновление тикета
@@ -33,6 +34,10 @@ func (h *TicketsHandler) createTicket(c *fiber.Ctx) error {
 		TopicID: req.TopicID,
 		Amount:  req.Amount,
 		Comment: req.Comment,
+	}
+	if req.PriorityID != nil {
+		priority := domain.Priority(*req.PriorityID)
+		input.Priority = &priority
 	}
 
 	ticket, err := h.service.CreateTicket(c.Context(), input)
@@ -113,6 +118,7 @@ func (h *TicketsHandler) listTickets(c *fiber.Ctx) error {
 
 	var userID, topicID *int64
 	var status *domain.Status
+	var priority *domain.Priority
 
 	if userIDStr := c.Query("userId"); userIDStr != "" {
 		val, err := strconv.ParseInt(userIDStr, 10, 64)
@@ -142,10 +148,23 @@ func (h *TicketsHandler) listTickets(c *fiber.Ctx) error {
 		status = &s
 	}
 
+	if priorityIDStr := c.Query("priorityId"); priorityIDStr != "" {
+		val, err := strconv.Atoi(priorityIDStr)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid priorityId parameter")
+		}
+		p := domain.Priority(val)
+		if !p.IsValid() {
+			return fiber.NewError(fiber.StatusBadRequest, "priorityId must be between 1 and 4")
+		}
+		priority = &p
+	}
+
 	input := tickets.ListTicketsInput{
 		UserID:   userID,
 		TopicID:  topicID,
 		Status:   status,
+		Priority: priority,
 		Limit:    limit,
 		Offset:   offset,
 		SortBy:   c.Query("sortBy", "created_at"),

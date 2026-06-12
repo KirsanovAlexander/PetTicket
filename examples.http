@@ -6,7 +6,7 @@ POST http://localhost:9000/api/v1/tickets
 Content-Type: application/json
 
 {
-  "userId": 1,
+  "userId": 1, 
   "topicId": 1,
   "amount": 100.50,
   "comment": "Не пришло пополнение на сумму 100.50"
@@ -14,7 +14,6 @@ Content-Type: application/json
 
 ### Получить тикет по ID
 GET http://localhost:9000/api/v1/tickets/1
-
 ### Обновить тикет
 PUT http://localhost:9000/api/v1/tickets/1
 Content-Type: application/json

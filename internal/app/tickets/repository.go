@@ -50,6 +50,7 @@ type ListFilter struct {
 	UserID   *int64
 	TopicID  *int64
 	Status   *tickets.Status
+	Priority *tickets.Priority
 	Limit    int
 	Offset   int
 	SortBy   string
