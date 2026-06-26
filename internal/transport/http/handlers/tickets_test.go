@@ -29,6 +29,8 @@ type mockTicketsService struct {
 	getAllTopicsFunc     func(ctx context.Context) ([]domain.Topic, error)
 	updatePriorityFunc   func(ctx context.Context, ticketID int64, priority domain.Priority, userID int64) (domain.Ticket, error)
 	escalateTicketFunc   func(ctx context.Context, ticketID int64, userID int64) (domain.Ticket, error)
+	addCommentFunc       func(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error)
+	getSLAViolationsFunc func(ctx context.Context) ([]domain.Ticket, error)
 }
 
 func (m *mockTicketsService) CreateTicket(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error) {
@@ -99,6 +101,20 @@ func (m *mockTicketsService) EscalateTicket(ctx context.Context, ticketID int64,
 		return m.escalateTicketFunc(ctx, ticketID, userID)
 	}
 	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) AddComment(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error) {
+	if m.addCommentFunc != nil {
+		return m.addCommentFunc(ctx, input)
+	}
+	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) GetSLAViolations(ctx context.Context) ([]domain.Ticket, error) {
+	if m.getSLAViolationsFunc != nil {
+		return m.getSLAViolationsFunc(ctx)
+	}
+	return nil, errors.New("not implemented")
 }
 
 // TestGetTicket_Success — успешное получение тикета через HTTP

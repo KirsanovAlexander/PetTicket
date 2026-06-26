@@ -59,12 +59,14 @@ func (h *TicketsHandler) RegisterRoutes(api fiber.Router) {
 
 	// Тикеты
 	ticketsGroup := api.Group("/tickets")
+	ticketsGroup.Get("/sla-violations", h.getSLAViolations)
 	ticketsGroup.Post("", mw.ValidateBody[CreateTicketRequest](), h.createTicket)
 	ticketsGroup.Get("/:id", h.getTicket)
 	ticketsGroup.Put("/:id", mw.ValidateBody[UpdateTicketRequest](), h.updateTicket)
 	ticketsGroup.Delete("/:id", h.deleteTicket)
 	ticketsGroup.Get("", h.listTickets)
 	ticketsGroup.Get("/:id/history", h.getTicketHistory)
+	ticketsGroup.Post("/:id/comments", mw.ValidateBody[AddCommentRequest](), h.addComment)
 
 	// Бизнес-логика
 	ticketsGroup.Post("/:id/assign", h.assignTicket)     // Назначить тикет на оператора
