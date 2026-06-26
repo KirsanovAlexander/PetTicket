@@ -37,6 +37,12 @@ type Repository interface {
 
 	// GetAllTopics возвращает все темы тикетов из справочника
 	GetAllTopics(ctx context.Context) ([]tickets.Topic, error)
+
+	// GetSLARule возвращает правило SLA для topic + priority (nil, nil если не найдено)
+	GetSLARule(ctx context.Context, topicID, priorityID int64) (*tickets.SLARule, error)
+
+	// FindSLAViolations возвращает тикеты с нарушенным SLA
+	FindSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
 }
 
 // StatusInfo представляет информацию о статусе из БД

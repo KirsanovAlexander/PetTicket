@@ -23,7 +23,9 @@ type mockRepository struct {
 	addHistoryFunc  func(ctx context.Context, history domain.History) error
 	getHistoryFunc  func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
 	getStatusesFunc func(ctx context.Context) ([]StatusInfo, error)
-	getTopicsFunc   func(ctx context.Context) ([]domain.Topic, error)
+	getTopicsFunc         func(ctx context.Context) ([]domain.Topic, error)
+	getSLARuleFunc        func(ctx context.Context, topicID, priorityID int64) (*domain.SLARule, error)
+	findSLAViolationsFunc func(ctx context.Context) ([]domain.Ticket, error)
 }
 
 func (m *mockRepository) Create(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
@@ -85,6 +87,20 @@ func (m *mockRepository) GetAllStatuses(ctx context.Context) ([]StatusInfo, erro
 func (m *mockRepository) GetAllTopics(ctx context.Context) ([]domain.Topic, error) {
 	if m.getTopicsFunc != nil {
 		return m.getTopicsFunc(ctx)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockRepository) GetSLARule(ctx context.Context, topicID, priorityID int64) (*domain.SLARule, error) {
+	if m.getSLARuleFunc != nil {
+		return m.getSLARuleFunc(ctx, topicID, priorityID)
+	}
+	return nil, nil
+}
+
+func (m *mockRepository) FindSLAViolations(ctx context.Context) ([]domain.Ticket, error) {
+	if m.findSLAViolationsFunc != nil {
+		return m.findSLAViolationsFunc(ctx)
 	}
 	return nil, errors.New("not implemented")
 }

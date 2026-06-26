@@ -3,6 +3,7 @@ package tickets
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"pet-ticket/internal/domain/tickets"
 
@@ -45,6 +46,14 @@ type ListTicketsInput struct {
 	SortDesc bool
 }
 
+// AddCommentInput входные данные для добавления комментария
+type AddCommentInput struct {
+	TicketID         int64
+	UserID           int64
+	Comment          string
+	IsSupportComment bool
+}
+
 // Service определяет бизнес-логику работы с тикетами
 type Service interface {
 	CreateTicket(ctx context.Context, input CreateTicketInput) (tickets.Ticket, error)
@@ -57,13 +66,16 @@ type Service interface {
 	GetAllTopics(ctx context.Context) ([]tickets.Topic, error)
 	UpdatePriority(ctx context.Context, ticketID int64, priority tickets.Priority, userID int64) (tickets.Ticket, error)
 	EscalateTicket(ctx context.Context, ticketID int64, userID int64) (tickets.Ticket, error)
+	AddComment(ctx context.Context, input AddCommentInput) (tickets.Ticket, error)
+	GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
 }
 
 // service реализует интерфейс Service
 type service struct {
-	repo   Repository
-	db     TxBeginner
-	logger zerolog.Logger
+	repo    Repository
+	db      TxBeginner
+	logger  zerolog.Logger
+	slaCalc *SLACalculator
 }
 
 // TxBeginner интерфейс для создания транзакций
@@ -80,9 +92,10 @@ type TxCommitter interface {
 // NewService создаёт новый экземпляр сервиса
 func NewService(repo Repository, db TxBeginner, logger zerolog.Logger) Service {
 	return &service{
-		repo:   repo,
-		db:     db,
-		logger: logger,
+		repo:    repo,
+		db:      db,
+		logger:  logger,
+		slaCalc: NewSLACalculator(repo),
 	}
 }
 
@@ -108,6 +121,17 @@ func (s *service) CreateTicket(ctx context.Context, input CreateTicketInput) (ti
 		s.logger.Warn().Err(err).Msg("invalid ticket data")
 		return tickets.Ticket{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
+
+	now := time.Now()
+	responseDeadline, resolutionDeadline, err := s.slaCalc.CalculateDeadlines(
+		ctx, input.TopicID, int64(priority), now,
+	)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("failed to calculate sla deadlines")
+		return tickets.Ticket{}, fmt.Errorf("failed to calculate sla deadlines: %w", err)
+	}
+	ticket.ResponseDeadline = responseDeadline
+	ticket.ResolutionDeadline = resolutionDeadline
 
 	// Начинаем транзакцию
 	tx, err := s.db.BeginTx(ctx)
@@ -189,6 +213,13 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 		existing.Comment = *input.Comment
 	}
 
+	now := time.Now()
+	setResolved := false
+	if input.Status != nil && s.slaCalc.ShouldSetResolvedAt(oldStatus, existing.Status) {
+		existing.ResolvedAt = &now
+		setResolved = true
+	}
+
 	// Валидация
 	if err := existing.Validate(); err != nil {
 		s.logger.Warn().Err(err).Msg("invalid ticket data after update")
@@ -230,6 +261,19 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 		}
 		if err = s.repo.AddHistory(txCtx, history); err != nil {
 			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add history")
+			return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
+		}
+	}
+
+	if setResolved {
+		history := tickets.History{
+			TicketID: updated.ID,
+			UserID:   updated.UserID,
+			Action:   tickets.ActionResolved,
+			NewValue: updated.Status.String(),
+		}
+		if err = s.repo.AddHistory(txCtx, history); err != nil {
+			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add resolved history")
 			return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
 		}
 	}
@@ -405,4 +449,86 @@ func (s *service) changePriority(
 
 	s.logger.Info().Int64("ticket_id", updated.ID).Str("priority", priority.String()).Msg("ticket priority updated")
 	return updated, nil
+}
+
+// AddComment добавляет комментарий и при необходимости фиксирует first_response_at
+func (s *service) AddComment(ctx context.Context, input AddCommentInput) (tickets.Ticket, error) {
+	if input.Comment == "" {
+		return tickets.Ticket{}, ErrInvalidInput
+	}
+
+	existing, err := s.repo.GetByID(ctx, input.TicketID)
+	if err != nil {
+		s.logger.Error().Err(err).Int64("id", input.TicketID).Msg("failed to get ticket for comment")
+		return tickets.Ticket{}, fmt.Errorf("failed to get ticket: %w", err)
+	}
+
+	setFirstResponse := s.slaCalc.ShouldSetFirstResponse(existing, input.IsSupportComment)
+	now := time.Now()
+	if setFirstResponse {
+		existing.FirstResponseAt = &now
+	}
+	existing.Comment = input.Comment
+
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("failed to begin transaction")
+		return tickets.Ticket{}, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				s.logger.Error().Err(rbErr).Msg("failed to rollback transaction")
+			}
+		}
+	}()
+
+	txCtx := context.WithValue(ctx, txContextKey, tx)
+
+	updated, err := s.repo.Update(txCtx, existing)
+	if err != nil {
+		s.logger.Error().Err(err).Int64("id", input.TicketID).Msg("failed to update ticket comment")
+		return tickets.Ticket{}, fmt.Errorf("failed to update ticket: %w", err)
+	}
+
+	history := tickets.History{
+		TicketID: updated.ID,
+		UserID:   input.UserID,
+		Action:   tickets.ActionCommentAdded,
+		NewValue: input.Comment,
+	}
+	if err = s.repo.AddHistory(txCtx, history); err != nil {
+		s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add comment history")
+		return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
+	}
+
+	if setFirstResponse {
+		firstResponseHistory := tickets.History{
+			TicketID: updated.ID,
+			UserID:   input.UserID,
+			Action:   tickets.ActionFirstResponse,
+			NewValue: now.Format(time.RFC3339),
+		}
+		if err = s.repo.AddHistory(txCtx, firstResponseHistory); err != nil {
+			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add first response history")
+			return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		s.logger.Error().Err(err).Msg("failed to commit transaction")
+		return tickets.Ticket{}, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
+// GetSLAViolations возвращает тикеты с нарушенным SLA
+func (s *service) GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error) {
+	list, err := s.repo.FindSLAViolations(ctx)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("failed to find sla violations")
+		return nil, fmt.Errorf("failed to find sla violations: %w", err)
+	}
+	return list, nil
 }
