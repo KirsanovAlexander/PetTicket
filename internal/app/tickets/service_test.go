@@ -24,8 +24,10 @@ type mockRepository struct {
 	getHistoryFunc  func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
 	getStatusesFunc func(ctx context.Context) ([]StatusInfo, error)
 	getTopicsFunc         func(ctx context.Context) ([]domain.Topic, error)
-	getSLARuleFunc        func(ctx context.Context, topicID, priorityID int64) (*domain.SLARule, error)
-	findSLAViolationsFunc func(ctx context.Context) ([]domain.Ticket, error)
+	getSLARuleFunc                  func(ctx context.Context, topicID, priorityID int64) (*domain.SLARule, error)
+	findSLAViolationsFunc           func(ctx context.Context) ([]domain.Ticket, error)
+	findResolvedTicketsOlderThanFunc func(ctx context.Context, inactiveDays int, limit int) ([]domain.Ticket, error)
+	updateLastUserActivityFunc      func(ctx context.Context, ticketID int64) error
 }
 
 func (m *mockRepository) Create(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
@@ -103,6 +105,20 @@ func (m *mockRepository) FindSLAViolations(ctx context.Context) ([]domain.Ticket
 		return m.findSLAViolationsFunc(ctx)
 	}
 	return nil, errors.New("not implemented")
+}
+
+func (m *mockRepository) FindResolvedTicketsOlderThan(ctx context.Context, inactiveDays int, limit int) ([]domain.Ticket, error) {
+	if m.findResolvedTicketsOlderThanFunc != nil {
+		return m.findResolvedTicketsOlderThanFunc(ctx, inactiveDays, limit)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockRepository) UpdateLastUserActivity(ctx context.Context, ticketID int64) error {
+	if m.updateLastUserActivityFunc != nil {
+		return m.updateLastUserActivityFunc(ctx, ticketID)
+	}
+	return errors.New("not implemented")
 }
 
 // mockDB — мок для работы с транзакциями
