@@ -86,7 +86,7 @@ func setupTestDB(t *testing.T) *testDB {
 // applyMigrations применяет SQL миграции из файлов проекта
 func applyMigrations(db *sql.DB) error {
 	migrationsDir := filepath.Join("..", "..", "..", "internal", "infra", "migration", "migrations")
-	files := []string{"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql"}
+	files := []string{"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql", "004_add_last_activity.up.sql"}
 
 	for _, name := range files {
 		migrationSQL, err := os.ReadFile(filepath.Join(migrationsDir, name))

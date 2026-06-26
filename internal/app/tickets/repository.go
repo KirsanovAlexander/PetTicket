@@ -43,6 +43,12 @@ type Repository interface {
 
 	// FindSLAViolations возвращает тикеты с нарушенным SLA
 	FindSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
+
+	// FindResolvedTicketsOlderThan возвращает resolved тикеты с неактивностью старше N дней
+	FindResolvedTicketsOlderThan(ctx context.Context, inactiveDays int, limit int) ([]tickets.Ticket, error)
+
+	// UpdateLastUserActivity обновляет время последней активности пользователя
+	UpdateLastUserActivity(ctx context.Context, ticketID int64) error
 }
 
 // StatusInfo представляет информацию о статусе из БД

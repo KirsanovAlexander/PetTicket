@@ -47,7 +47,7 @@ func (r *TicketsRepository) getExecutor(ctx context.Context) Executor {
 const ticketSelectColumns = `
 	id, user_id, topic_id, status_id, priority_id, amount, comment,
 	response_deadline, resolution_deadline, first_response_at, resolved_at,
-	created_at, updated_at
+	last_user_activity_at, created_at, updated_at
 `
 
 func scanTicket(scanner interface {
@@ -56,6 +56,7 @@ func scanTicket(scanner interface {
 	var ticket domain.Ticket
 	var statusID, priorityID int
 	var responseDeadline, resolutionDeadline, firstResponseAt, resolvedAt sql.NullTime
+	var lastUserActivityAt sql.NullTime
 
 	err := scanner.Scan(
 		&ticket.ID,
@@ -69,6 +70,7 @@ func scanTicket(scanner interface {
 		&resolutionDeadline,
 		&firstResponseAt,
 		&resolvedAt,
+		&lastUserActivityAt,
 		&ticket.CreatedAt,
 		&ticket.UpdatedAt,
 	)
@@ -91,6 +93,9 @@ func scanTicket(scanner interface {
 	if resolvedAt.Valid {
 		t := resolvedAt.Time
 		ticket.ResolvedAt = &t
+	}
+	if lastUserActivityAt.Valid {
+		ticket.LastUserActivityAt = lastUserActivityAt.Time
 	}
 
 	return ticket, nil
@@ -508,4 +513,59 @@ func (r *TicketsRepository) FindSLAViolations(ctx context.Context) ([]domain.Tic
 	}
 
 	return ticketList, nil
+}
+
+// FindResolvedTicketsOlderThan возвращает resolved тикеты с неактивностью старше N дней
+func (r *TicketsRepository) FindResolvedTicketsOlderThan(
+	ctx context.Context, inactiveDays int, limit int,
+) ([]domain.Ticket, error) {
+	query := `
+		SELECT ` + ticketSelectColumns + `
+		FROM tickets
+		WHERE
+			status_id = (SELECT id FROM ticket_statuses WHERE name = 'resolved')
+			AND last_user_activity_at < NOW() - INTERVAL '1 day' * $1
+		ORDER BY last_user_activity_at ASC
+		LIMIT $2
+	`
+
+	rows, err := r.db.conn.QueryContext(ctx, query, inactiveDays, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query resolved tickets: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = fmt.Errorf("failed to close rows: %w", closeErr)
+		}
+	}()
+
+	var ticketList []domain.Ticket
+	for rows.Next() {
+		ticket, err := scanTicket(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan ticket: %w", err)
+		}
+		ticketList = append(ticketList, ticket)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate tickets: %w", err)
+	}
+
+	return ticketList, nil
+}
+
+// UpdateLastUserActivity обновляет время последней активности пользователя
+func (r *TicketsRepository) UpdateLastUserActivity(ctx context.Context, ticketID int64) error {
+	query := `
+		UPDATE tickets
+		SET last_user_activity_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`
+	exec := r.getExecutor(ctx)
+	_, err := exec.ExecContext(ctx, query, ticketID)
+	if err != nil {
+		return fmt.Errorf("failed to update last user activity: %w", err)
+	}
+	return nil
 }

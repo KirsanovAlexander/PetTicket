@@ -54,6 +54,13 @@ type AddCommentInput struct {
 	IsSupportComment bool
 }
 
+// CloseTicketInput входные данные для закрытия тикета
+type CloseTicketInput struct {
+	TicketID int64
+	UserID   int64
+	Reason   string
+}
+
 // Service определяет бизнес-логику работы с тикетами
 type Service interface {
 	CreateTicket(ctx context.Context, input CreateTicketInput) (tickets.Ticket, error)
@@ -68,6 +75,7 @@ type Service interface {
 	EscalateTicket(ctx context.Context, ticketID int64, userID int64) (tickets.Ticket, error)
 	AddComment(ctx context.Context, input AddCommentInput) (tickets.Ticket, error)
 	GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
+	CloseTicket(ctx context.Context, input CloseTicketInput) (tickets.Ticket, error)
 }
 
 // service реализует интерфейс Service
@@ -485,6 +493,12 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 
 	txCtx := context.WithValue(ctx, txContextKey, tx)
 
+	if !input.IsSupportComment {
+		if err := s.repo.UpdateLastUserActivity(txCtx, existing.ID); err != nil {
+			s.logger.Warn().Err(err).Int64("ticket_id", existing.ID).Msg("failed to update user activity")
+		}
+	}
+
 	updated, err := s.repo.Update(txCtx, existing)
 	if err != nil {
 		s.logger.Error().Err(err).Int64("id", input.TicketID).Msg("failed to update ticket comment")
@@ -531,4 +545,61 @@ func (s *service) GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error
 		return nil, fmt.Errorf("failed to find sla violations: %w", err)
 	}
 	return list, nil
+}
+
+// CloseTicket закрывает resolved тикет и записывает историю
+func (s *service) CloseTicket(ctx context.Context, input CloseTicketInput) (tickets.Ticket, error) {
+	ticket, err := s.repo.GetByID(ctx, input.TicketID)
+	if err != nil {
+		s.logger.Error().Err(err).Int64("ticket_id", input.TicketID).Msg("failed to get ticket")
+		return tickets.Ticket{}, fmt.Errorf("failed to get ticket: %w", err)
+	}
+
+	if ticket.Status != tickets.StatusResolved {
+		return tickets.Ticket{}, fmt.Errorf("can only close resolved tickets, current status: %s", ticket.Status)
+	}
+
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return tickets.Ticket{}, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				s.logger.Error().Err(rbErr).Msg("failed to rollback transaction")
+			}
+		}
+	}()
+	txCtx := context.WithValue(ctx, txContextKey, tx)
+
+	oldStatus := ticket.Status
+	ticket.Status = tickets.StatusClosed
+
+	updated, err := s.repo.Update(txCtx, ticket)
+	if err != nil {
+		return tickets.Ticket{}, fmt.Errorf("failed to update ticket: %w", err)
+	}
+
+	history := tickets.History{
+		TicketID: ticket.ID,
+		UserID:   input.UserID,
+		Action:   tickets.ActionAutoClosed,
+		OldValue: oldStatus.String(),
+		NewValue: tickets.StatusClosed.String(),
+	}
+	if err = s.repo.AddHistory(txCtx, history); err != nil {
+		return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return tickets.Ticket{}, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	s.logger.Info().
+		Int64("ticket_id", ticket.ID).
+		Str("reason", input.Reason).
+		Int64("user_id", input.UserID).
+		Msg("ticket closed")
+
+	return updated, nil
 }

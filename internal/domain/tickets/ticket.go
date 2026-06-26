@@ -18,8 +18,23 @@ type Ticket struct {
 	ResolutionDeadline time.Time
 	FirstResponseAt    *time.Time
 	ResolvedAt         *time.Time
+	LastUserActivityAt time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+// IsInactiveResolved проверяет, может ли тикет быть автоматически закрыт
+func (t *Ticket) IsInactiveResolved(inactiveDays int) bool {
+	if t.Status != StatusResolved {
+		return false
+	}
+	inactiveThreshold := time.Now().AddDate(0, 0, -inactiveDays)
+	return t.LastUserActivityAt.Before(inactiveThreshold)
+}
+
+// UpdateUserActivity обновляет время последней активности пользователя
+func (t *Ticket) UpdateUserActivity() {
+	t.LastUserActivityAt = time.Now()
 }
 
 // IsFirstResponse возвращает true, если первый ответ саппорта уже зафиксирован
