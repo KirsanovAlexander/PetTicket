@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"pet-ticket/internal/app/tickets"
 	domain "pet-ticket/internal/domain/tickets"
@@ -22,6 +23,10 @@ const (
 // TicketsRepository реализует интерфейс tickets.Repository
 type TicketsRepository struct {
 	db *DB
+
+	statusCacheMu   sync.RWMutex
+	statusCache     map[string]int64
+	statusCacheInit bool
 }
 
 // Executor интерфейс для выполнения запросов (поддерживает как *sql.DB, так и *sql.Tx)
@@ -42,6 +47,76 @@ func (r *TicketsRepository) getExecutor(ctx context.Context) Executor {
 		return tx.tx
 	}
 	return r.db.conn
+}
+
+// getStatusIDByName возвращает ID статуса по его имени, используя закешированный маппинг
+// name -> id, загруженный из таблицы ticket_statuses. Кеш заполняется один раз (double-checked locking)
+// и потокобезопасен благодаря statusCacheMu.
+func (r *TicketsRepository) getStatusIDByName(ctx context.Context, statusName string) (int64, error) {
+	r.statusCacheMu.RLock()
+	if r.statusCacheInit {
+		id, ok := r.statusCache[statusName]
+		r.statusCacheMu.RUnlock()
+		if !ok {
+			return 0, fmt.Errorf("%w: unknown status %q", tickets.ErrInvalidStatus, statusName)
+		}
+		return id, nil
+	}
+	r.statusCacheMu.RUnlock()
+
+	r.statusCacheMu.Lock()
+	defer r.statusCacheMu.Unlock()
+
+	if !r.statusCacheInit {
+		if err := r.loadStatusCache(ctx); err != nil {
+			return 0, err
+		}
+	}
+
+	id, ok := r.statusCache[statusName]
+	if !ok {
+		return 0, fmt.Errorf("%w: unknown status %q", tickets.ErrInvalidStatus, statusName)
+	}
+	return id, nil
+}
+
+// loadStatusCache загружает маппинг name -> id из ticket_statuses одним запросом.
+// Вызывающий обязан удерживать statusCacheMu на запись.
+func (r *TicketsRepository) loadStatusCache(ctx context.Context) error {
+	rows, err := r.db.conn.QueryContext(ctx, `SELECT id, name FROM ticket_statuses`)
+	if err != nil {
+		return fmt.Errorf("failed to load ticket statuses: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = fmt.Errorf("failed to close rows: %w", closeErr)
+		}
+	}()
+
+	cache := make(map[string]int64)
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return fmt.Errorf("failed to scan ticket status: %w", err)
+		}
+		cache[name] = id
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate ticket statuses: %w", err)
+	}
+
+	r.statusCache = cache
+	r.statusCacheInit = true
+	return nil
+}
+
+// InvalidateStatusCache сбрасывает кеш маппинга статусов (используется в тестах)
+func (r *TicketsRepository) InvalidateStatusCache() {
+	r.statusCacheMu.Lock()
+	defer r.statusCacheMu.Unlock()
+	r.statusCache = nil
+	r.statusCacheInit = false
 }
 
 const ticketSelectColumns = `
@@ -235,8 +310,13 @@ func (r *TicketsRepository) List(ctx context.Context, filter tickets.ListFilter)
 	}
 
 	if filter.Status != nil {
+		statusName := filter.Status.String()
+		statusID, err := r.getStatusIDByName(ctx, statusName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get status ID: %w", err)
+		}
 		query += fmt.Sprintf(" AND status_id = $%d", argPos)
-		args = append(args, int(*filter.Status))
+		args = append(args, statusID)
 		argPos++
 	}
 

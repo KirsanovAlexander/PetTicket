@@ -732,6 +732,137 @@ func TestTicketsRepository_List_FilterByPriority_Integration(t *testing.T) {
 	}
 }
 
+// TestIntegration_List_Filter — фильтрация по статусу работает через имя статуса для всех 5 статусов
+func TestIntegration_List_Filter(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	userID := int64(1500)
+	statuses := []domain.Status{
+		domain.StatusNew,
+		domain.StatusInProgress,
+		domain.StatusResolved,
+		domain.StatusClosed,
+		domain.StatusCancelled,
+	}
+
+	for _, status := range statuses {
+		_, err := repo.Create(ctx, domain.Ticket{
+			UserID:  userID,
+			TopicID: 1,
+			Status:  status,
+			Comment: "Ticket with status " + status.String(),
+		})
+		if err != nil {
+			t.Fatalf("failed to create ticket with status %s: %v", status.String(), err)
+		}
+	}
+
+	for _, status := range statuses {
+		status := status
+		t.Run("status="+status.String(), func(t *testing.T) {
+			filter := apptickets.ListFilter{
+				UserID: &userID,
+				Status: &status,
+				Limit:  10,
+			}
+
+			list, err := repo.List(ctx, filter)
+			if err != nil {
+				t.Fatalf("failed to list tickets: %v", err)
+			}
+
+			if len(list) != 1 {
+				t.Fatalf("expected 1 ticket with status %q, got %d", status.String(), len(list))
+			}
+			if list[0].Status != status {
+				t.Errorf("expected status %q, got %q", status.String(), list[0].Status.String())
+			}
+		})
+	}
+}
+
+// TestTicketsRepository_getStatusIDByName_Integration — маппинг статусов загружается из БД и кешируется
+func TestTicketsRepository_getStatusIDByName_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	expected := map[string]int64{
+		"new":         1,
+		"in_progress": 2,
+		"resolved":    3,
+		"closed":      4,
+		"cancelled":   5,
+	}
+
+	for name, wantID := range expected {
+		id, err := repo.getStatusIDByName(ctx, name)
+		if err != nil {
+			t.Fatalf("failed to get status ID for %q: %v", name, err)
+		}
+		if id != wantID {
+			t.Errorf("expected id %d for status %q, got %d", wantID, name, id)
+		}
+	}
+
+	// Повторный вызов должен возвращать тот же результат из кеша, без обращения к БД
+	if !repo.statusCacheInit {
+		t.Fatal("expected status cache to be initialized after first lookup")
+	}
+
+	id, err := repo.getStatusIDByName(ctx, "resolved")
+	if err != nil {
+		t.Fatalf("failed to get cached status ID: %v", err)
+	}
+	if id != 3 {
+		t.Errorf("expected cached id 3 for 'resolved', got %d", id)
+	}
+
+	// Неизвестное имя статуса должно возвращать ошибку
+	if _, err := repo.getStatusIDByName(ctx, "does_not_exist"); err == nil {
+		t.Error("expected error for unknown status name, got nil")
+	}
+
+	// InvalidateStatusCache сбрасывает кеш, но следующий вызов снова находит статус
+	repo.InvalidateStatusCache()
+	if repo.statusCacheInit {
+		t.Fatal("expected status cache to be reset after InvalidateStatusCache")
+	}
+
+	id, err = repo.getStatusIDByName(ctx, "new")
+	if err != nil {
+		t.Fatalf("failed to get status ID after cache invalidation: %v", err)
+	}
+	if id != 1 {
+		t.Errorf("expected id 1 for 'new' after cache reload, got %d", id)
+	}
+}
+
+// TestTicketsRepository_getStatusIDByName_Concurrent_Integration — конкурентные вызовы не приводят к гонкам
+func TestTicketsRepository_getStatusIDByName_Concurrent_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	const goroutines = 20
+	errCh := make(chan error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			_, err := repo.getStatusIDByName(ctx, "new")
+			errCh <- err
+		}()
+	}
+
+	for i := 0; i < goroutines; i++ {
+		if err := <-errCh; err != nil {
+			t.Errorf("unexpected error from concurrent getStatusIDByName: %v", err)
+		}
+	}
+}
+
 // Benchmark тесты
 
 func BenchmarkTicketsRepository_Create(b *testing.B) {
