@@ -208,6 +208,7 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 	}
 
 	oldStatus := existing.Status
+	oldComment := existing.Comment
 
 	// Обновляем поля
 	if input.Status != nil {
@@ -287,11 +288,12 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 	}
 
 	// Добавление записи в историю при изменении комментария
-	if input.Comment != nil {
+	if input.Comment != nil && oldComment != *input.Comment {
 		history := tickets.History{
 			TicketID: updated.ID,
 			UserID:   updated.UserID,
-			Action:   tickets.ActionCommentAdded,
+			Action:   tickets.ActionCommentUpdated,
+			OldValue: oldComment,
 			NewValue: *input.Comment,
 		}
 		if err = s.repo.AddHistory(txCtx, history); err != nil {
@@ -508,7 +510,7 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 	history := tickets.History{
 		TicketID: updated.ID,
 		UserID:   input.UserID,
-		Action:   tickets.ActionCommentAdded,
+		Action:   tickets.ActionCommentUpdated,
 		NewValue: input.Comment,
 	}
 	if err = s.repo.AddHistory(txCtx, history); err != nil {

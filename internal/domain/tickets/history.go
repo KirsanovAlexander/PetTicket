@@ -8,7 +8,7 @@ type HistoryAction string
 const (
 	ActionCreated         HistoryAction = "created"
 	ActionStatusChanged   HistoryAction = "status_changed"
-	ActionCommentAdded    HistoryAction = "comment_added"
+	ActionCommentUpdated  HistoryAction = "comment_updated"
 	ActionUpdated         HistoryAction = "updated"
 	ActionPriorityChanged HistoryAction = "priority_changed"
 	ActionEscalated       HistoryAction = "escalated"

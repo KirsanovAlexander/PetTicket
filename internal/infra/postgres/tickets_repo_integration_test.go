@@ -454,7 +454,7 @@ func TestTicketsRepository_History_Integration(t *testing.T) {
 		},
 		{
 			TicketID: ticket.ID,
-			Action:   domain.ActionCommentAdded,
+			Action:   domain.ActionCommentUpdated,
 			NewValue: "Additional comment",
 		},
 	}
@@ -479,8 +479,8 @@ func TestTicketsRepository_History_Integration(t *testing.T) {
 	}
 
 	// Проверяем порядок (должны быть отсортированы по created_at DESC)
-	if history[0].Action != domain.ActionCommentAdded {
-		t.Errorf("expected first entry to be 'comment_added', got %s", history[0].Action)
+	if history[0].Action != domain.ActionCommentUpdated {
+		t.Errorf("expected first entry to be 'comment_updated', got %s", history[0].Action)
 	}
 
 	// Test пагинация истории

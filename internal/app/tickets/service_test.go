@@ -393,6 +393,216 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 	}
 }
 
+// TestUpdateTicket_CommentNotChanged — история НЕ добавляется при отправке того же комментария
+func TestUpdateTicket_CommentNotChanged(t *testing.T) {
+	// Arrange
+	existingTicket := domain.Ticket{
+		ID:       123,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "Исходный комментарий",
+	}
+
+	committed := false
+	historyAdded := false
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) {
+			return existingTicket, nil
+		},
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			return ticket, nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			historyAdded = true
+			return nil
+		},
+	}
+
+	db := &mockDB{
+		beginTxFunc: func(ctx context.Context) (TxCommitter, error) {
+			return &mockTx{
+				commitFunc: func() error {
+					committed = true
+					return nil
+				},
+			}, nil
+		},
+	}
+
+	logger := testLogger()
+	svc := NewService(repo, db, logger)
+
+	sameComment := "Исходный комментарий"
+	input := UpdateTicketInput{
+		ID:      123,
+		Comment: &sameComment,
+	}
+
+	// Act
+	ticket, err := svc.UpdateTicket(context.Background(), input)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if ticket.Comment != "Исходный комментарий" {
+		t.Errorf("expected comment 'Исходный комментарий', got %s", ticket.Comment)
+	}
+	if historyAdded {
+		t.Error("expected history NOT to be added when comment unchanged")
+	}
+	if !committed {
+		t.Error("expected transaction to be committed")
+	}
+}
+
+// TestUpdateTicket_CommentChanged — история добавляется с корректными Action/OldValue/NewValue
+func TestUpdateTicket_CommentChanged(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:       123,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "Проблема с оплатой",
+	}
+
+	var capturedHistory domain.History
+	committed := false
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) {
+			return existingTicket, nil
+		},
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			return ticket, nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			capturedHistory = history
+			return nil
+		},
+	}
+
+	db := &mockDB{
+		beginTxFunc: func(ctx context.Context) (TxCommitter, error) {
+			return &mockTx{
+				commitFunc: func() error {
+					committed = true
+					return nil
+				},
+			}, nil
+		},
+	}
+
+	logger := testLogger()
+	svc := NewService(repo, db, logger)
+
+	newComment := "Проблема решена"
+	input := UpdateTicketInput{
+		ID:      123,
+		Comment: &newComment,
+	}
+
+	ticket, err := svc.UpdateTicket(context.Background(), input)
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if ticket.Comment != "Проблема решена" {
+		t.Errorf("expected comment 'Проблема решена', got %s", ticket.Comment)
+	}
+	if capturedHistory.Action != domain.ActionCommentUpdated {
+		t.Errorf("expected history action 'comment_updated', got %s", capturedHistory.Action)
+	}
+	if capturedHistory.OldValue != "Проблема с оплатой" {
+		t.Errorf("expected old value 'Проблема с оплатой', got %s", capturedHistory.OldValue)
+	}
+	if capturedHistory.NewValue != "Проблема решена" {
+		t.Errorf("expected new value 'Проблема решена', got %s", capturedHistory.NewValue)
+	}
+	if capturedHistory.TicketID != 123 {
+		t.Errorf("expected ticket ID 123, got %d", capturedHistory.TicketID)
+	}
+	if capturedHistory.UserID != 100 {
+		t.Errorf("expected user ID 100, got %d", capturedHistory.UserID)
+	}
+	if !committed {
+		t.Error("expected transaction to be committed")
+	}
+}
+
+// TestUpdateTicket_CommentEmptyToValue — пустой комментарий, ставший непустым, тоже считается изменением
+func TestUpdateTicket_CommentEmptyToValue(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:       123,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityMedium,
+		Comment:  "",
+	}
+
+	var capturedHistory domain.History
+	committed := false
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) {
+			return existingTicket, nil
+		},
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			return ticket, nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			capturedHistory = history
+			return nil
+		},
+	}
+
+	db := &mockDB{
+		beginTxFunc: func(ctx context.Context) (TxCommitter, error) {
+			return &mockTx{
+				commitFunc: func() error {
+					committed = true
+					return nil
+				},
+			}, nil
+		},
+	}
+
+	logger := testLogger()
+	svc := NewService(repo, db, logger)
+
+	newComment := "Новый комментарий"
+	input := UpdateTicketInput{
+		ID:      123,
+		Comment: &newComment,
+	}
+
+	ticket, err := svc.UpdateTicket(context.Background(), input)
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if ticket.Comment != "Новый комментарий" {
+		t.Errorf("expected comment 'Новый комментарий', got %s", ticket.Comment)
+	}
+	if capturedHistory.Action != domain.ActionCommentUpdated {
+		t.Errorf("expected history action 'comment_updated', got %s", capturedHistory.Action)
+	}
+	if capturedHistory.OldValue != "" {
+		t.Errorf("expected old value '', got %s", capturedHistory.OldValue)
+	}
+	if capturedHistory.NewValue != "Новый комментарий" {
+		t.Errorf("expected new value 'Новый комментарий', got %s", capturedHistory.NewValue)
+	}
+	if !committed {
+		t.Error("expected transaction to be committed")
+	}
+}
+
 // TestUpdateTicket_TransactionRollback — откат при ошибке истории
 func TestUpdateTicket_TransactionRollback(t *testing.T) {
 	// Arrange
