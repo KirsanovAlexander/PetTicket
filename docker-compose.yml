@@ -37,6 +37,29 @@ services:
       postgres:
         condition: service_healthy
 
+  auto-closer:
+    build:
+      context: .
+      dockerfile: Dockerfile.auto-closer
+    container_name: pet-ticket-auto-closer
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: pet_ticket
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      AUTO_CLOSE_ENABLED: "true"
+      AUTO_CLOSE_AFTER_DAYS: "7"
+      AUTO_CLOSE_CRON: "0 * * * *"
+      AUTO_CLOSE_BATCH_SIZE: "100"
+      AUTO_CLOSE_PROCESSING_TIMEOUT: "300"
+      LOGGER_FORMAT: console
+      ENV: local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.48.1
     container_name: pet-ticket-prometheus

@@ -34,6 +34,12 @@ type Config struct {
 	PostgresEnabledMigration bool   `envconfig:"POSTGRES_ENABLED_MIGRATION" default:"true"`
 	PostgresSSLMode          string `envconfig:"POSTGRES_SSLMODE" default:"disable"`
 
+	AutoCloseEnabled           bool   `envconfig:"AUTO_CLOSE_ENABLED" default:"true"`
+	AutoCloseInactiveDays      int    `envconfig:"AUTO_CLOSE_AFTER_DAYS" default:"7"`
+	AutoCloseCronSchedule      string `envconfig:"AUTO_CLOSE_CRON" default:"0 * * * *"`
+	AutoCloseBatchSize         int    `envconfig:"AUTO_CLOSE_BATCH_SIZE" default:"100"`
+	AutoCloseProcessingTimeout int    `envconfig:"AUTO_CLOSE_PROCESSING_TIMEOUT" default:"300"`
+
 	ENV string `envconfig:"ENV" default:"local"`
 }
 

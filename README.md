@@ -35,11 +35,9 @@
 
 #### GoLand/IntelliJ IDEA
 
-Файл уже настроен, но если нужно вручную:
-
-1. **Settings → Go → Build Tags & Vendoring**
-2. Добавьте в "Custom tags": `integration`
-3. Или в "OS and Arch": `-tags=integration`
+1. **Settings → Go → Build Tags** (в старых версиях: **Build Tags & Vendoring**)
+2. В поле **Custom tags** укажите: `integration` (несколько тегов — через пробел)
+3. **Apply** / **OK**
 
 #### VS Code
 

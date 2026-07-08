@@ -16,12 +16,6 @@ type AssignTicketRequest struct {
 	Comment    string `json:"comment,omitempty" validate:"omitempty,max=500"`
 }
 
-// EscalateTicketRequest запрос на эскалацию тикета
-type EscalateTicketRequest struct {
-	Reason   string `json:"reason" validate:"required,min=10,max=1000"`
-	Priority int    `json:"priority" validate:"required,gte=1,lte=3"` // 1=низкий, 2=средний, 3=высокий
-}
-
 // assignTicket назначает тикет на оператора (бизнес-логика)
 func (h *TicketsHandler) assignTicket(c *fiber.Ctx) error {
 	ticketID, err := strconv.ParseInt(c.Params("id"), 10, 64)
@@ -71,11 +65,6 @@ func (h *TicketsHandler) assignTicket(c *fiber.Ctx) error {
 		Int64("assignedBy", userID).
 		Msg("ticket assigned to operator")
 
-	// Здесь можно добавить:
-	// - Отправку уведомления оператору
-	// - Запись в отдельную таблицу assignments
-	// - Обновление метрик
-
 	resp := dto.ToTicketResponse(updated)
 	return c.JSON(fiber.Map{
 		"ticket":     resp,
@@ -84,60 +73,38 @@ func (h *TicketsHandler) assignTicket(c *fiber.Ctx) error {
 	})
 }
 
-// escalateTicket эскалирует тикет на следующий уровень поддержки
+// escalateTicket повышает приоритет тикета на один уровень
 func (h *TicketsHandler) escalateTicket(c *fiber.Ctx) error {
 	ticketID, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid ticket id")
 	}
 
-	var req EscalateTicketRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-	}
-
 	userID := c.Locals("userID").(int64)
 
-	// Получаем тикет
 	ticket, err := h.service.GetTicket(c.Context(), ticketID)
 	if err != nil {
 		return err
 	}
 
-	// Проверяем бизнес-правила эскалации
 	if ticket.Status == domain.StatusClosed || ticket.Status == domain.StatusCancelled {
 		return fiber.NewError(fiber.StatusConflict, "cannot escalate closed or cancelled ticket")
 	}
 
-	// Добавляем комментарий об эскалации
-	escalationComment := "Escalated: " + req.Reason
-
-	updated, err := h.service.UpdateTicket(c.Context(), tickets.UpdateTicketInput{
-		ID:      ticketID,
-		Comment: &escalationComment,
-	})
+	updated, err := h.service.EscalateTicket(c.Context(), ticketID, userID)
 	if err != nil {
 		return err
 	}
 
-	// Логируем эскалацию
 	h.logger.Warn().
 		Int64("ticketId", ticketID).
 		Int64("escalatedBy", userID).
-		Int("priority", req.Priority).
-		Str("reason", req.Reason).
+		Int("priority", int(updated.Priority)).
 		Msg("ticket escalated")
-
-	// Здесь можно добавить:
-	// - Отправку уведомлений руководителю
-	// - Изменение SLA тикета
-	// - Автоматическое назначение на старшего специалиста
-	// - Запись в таблицу escalations
 
 	resp := dto.ToTicketResponse(updated)
 	return c.JSON(fiber.Map{
-		"ticket":   resp,
-		"priority": req.Priority,
-		"message":  "ticket successfully escalated",
+		"ticket":  resp,
+		"message": "ticket successfully escalated",
 	})
 }
