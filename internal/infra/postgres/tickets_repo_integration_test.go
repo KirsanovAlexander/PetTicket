@@ -84,22 +84,21 @@ func setupTestDB(t *testing.T) *testDB {
 }
 
 // applyMigrations применяет SQL миграции из файлов проекта
-// Использует реальную миграцию из internal/infra/migration/migrations/001_init.up.sql
-// вместо дублирования SQL кода в тестах
 func applyMigrations(db *sql.DB) error {
-	// Путь к миграции относительно текущего пакета (internal/infra/postgres)
-	// Поднимаемся на 3 уровня вверх и спускаемся к миграциям
-	migrationPath := filepath.Join("..", "..", "..", "internal", "infra", "migration", "migrations", "001_init.up.sql")
+	migrationsDir := filepath.Join("..", "..", "..", "internal", "infra", "migration", "migrations")
+	files := []string{"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql", "004_add_last_activity.up.sql"}
 
-	// Читаем файл миграции
-	migrationSQL, err := os.ReadFile(migrationPath)
-	if err != nil {
-		return err
+	for _, name := range files {
+		migrationSQL, err := os.ReadFile(filepath.Join(migrationsDir, name))
+		if err != nil {
+			return err
+		}
+		if _, err := db.Exec(string(migrationSQL)); err != nil {
+			return err
+		}
 	}
 
-	// Применяем миграцию к тестовой БД
-	_, err = db.Exec(string(migrationSQL))
-	return err
+	return nil
 }
 
 // TestTicketsRepository_Create_Integration — интеграционный тест создания тикета
@@ -111,10 +110,11 @@ func TestTicketsRepository_Create_Integration(t *testing.T) {
 
 	// Arrange
 	newTicket := domain.Ticket{
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Integration test ticket",
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityHigh,
+		Comment:  "Integration test ticket",
 	}
 
 	// Act
@@ -139,6 +139,9 @@ func TestTicketsRepository_Create_Integration(t *testing.T) {
 	}
 	if created.Comment != newTicket.Comment {
 		t.Errorf("expected comment %s, got %s", newTicket.Comment, created.Comment)
+	}
+	if created.Priority != domain.PriorityHigh {
+		t.Errorf("expected priority high, got %s", created.Priority.String())
 	}
 	if created.CreatedAt.IsZero() {
 		t.Error("expected created_at to be set by database")
@@ -658,6 +661,74 @@ func TestTicketsRepository_TransactionRollback_Integration(t *testing.T) {
 	_, err = repo.GetByID(ctx, ticket.ID)
 	if err != apptickets.ErrNotFound {
 		t.Errorf("expected ErrNotFound after rollback, got: %v", err)
+	}
+}
+
+// TestTicketsRepository_Create_DefaultPriority_Integration — дефолтный приоритет Medium
+func TestTicketsRepository_Create_DefaultPriority_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID:  901,
+		TopicID: 1,
+		Status:  domain.StatusNew,
+		Comment: "Ticket without explicit priority",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+	if created.Priority != domain.PriorityMedium {
+		t.Errorf("expected default priority medium, got %s", created.Priority.String())
+	}
+}
+
+// TestTicketsRepository_List_FilterByPriority_Integration — фильтрация и сортировка по приоритету
+func TestTicketsRepository_List_FilterByPriority_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	ticketsToCreate := []domain.Ticket{
+		{UserID: 902, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "Low priority ticket"},
+		{UserID: 902, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityHigh, Comment: "High priority ticket"},
+		{UserID: 902, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityCritical, Comment: "Critical priority ticket"},
+	}
+	for _, ticket := range ticketsToCreate {
+		if _, err := repo.Create(ctx, ticket); err != nil {
+			t.Fatalf("failed to create ticket: %v", err)
+		}
+	}
+
+	priorityHigh := domain.PriorityHigh
+	list, err := repo.List(ctx, apptickets.ListFilter{
+		Priority: &priorityHigh,
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("failed to list tickets: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 high priority ticket, got %d", len(list))
+	}
+	if list[0].Priority != domain.PriorityHigh {
+		t.Errorf("expected high priority, got %s", list[0].Priority.String())
+	}
+
+	sorted, err := repo.List(ctx, apptickets.ListFilter{
+		SortBy:   "priority_id",
+		SortDesc: true,
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("failed to list sorted tickets: %v", err)
+	}
+	if len(sorted) < 3 {
+		t.Fatalf("expected at least 3 tickets, got %d", len(sorted))
+	}
+	if sorted[0].Priority != domain.PriorityCritical {
+		t.Errorf("expected highest priority first, got %s", sorted[0].Priority.String())
 	}
 }
 

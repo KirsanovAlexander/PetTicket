@@ -12,6 +12,9 @@ var (
 	// ErrInvalidStatus возвращается при попытке установить невалидный статус
 	ErrInvalidStatus = errors.New("invalid status")
 
+	// ErrInvalidPriority возвращается при попытке установить невалидный приоритет
+	ErrInvalidPriority = errors.New("invalid priority")
+
 	// ErrUnauthorized возвращается при попытке доступа к чужому тикету
 	ErrUnauthorized = errors.New("unauthorized access")
 

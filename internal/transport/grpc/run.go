@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"pet-ticket/api/gen/go/ticket/v1"
+	ticketv1 "pet-ticket/api/gen/go/ticket/v1"
 	"pet-ticket/internal/app/tickets"
 
 	"github.com/rs/zerolog"
