@@ -6,10 +6,15 @@ import "time"
 type HistoryAction string
 
 const (
-	ActionCreated       HistoryAction = "created"
-	ActionStatusChanged HistoryAction = "status_changed"
-	ActionCommentAdded  HistoryAction = "comment_added"
-	ActionUpdated       HistoryAction = "updated"
+	ActionCreated         HistoryAction = "created"
+	ActionStatusChanged   HistoryAction = "status_changed"
+	ActionCommentUpdated  HistoryAction = "comment_updated"
+	ActionUpdated         HistoryAction = "updated"
+	ActionPriorityChanged HistoryAction = "priority_changed"
+	ActionEscalated       HistoryAction = "escalated"
+	ActionFirstResponse   HistoryAction = "first_response"
+	ActionResolved        HistoryAction = "resolved"
+	ActionAutoClosed      HistoryAction = "auto_closed"
 )
 
 // History представляет запись в истории изменений тикета

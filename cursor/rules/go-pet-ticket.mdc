@@ -1,0 +1,43 @@
+---
+description: Go conventions for Pet Ticket project
+globs: "**/*.go"
+---
+
+# Pet Ticket - Go Conventions
+
+## Architecture
+-Clean Architecture: domain -> app -> infra -> transport
+-domain/ - чистые модели, никаких зависимостей
+-app/ - бизнес-логика, интерфейсы репозиториев
+-infra/ - реализация (postgres, redis, grpc)
+-transport/ - HTTP handlers, DTO, маппинг
+
+## Code Style
+-Error handling: fmt.Errorf("контекст: %w", err) - всегда с контекстом
+-Interfaces: в пакете-потребителе, 1-3 метода, -er суффикс
+-"Accept interfaces, return structs"
+-Конструкторы: NewXxx() возвращает*конкретный тип*
+-context.Context - первый параметр для I/O
+-Тесты: table-driven, t.Helper() в хелперах
+-Logging: slog, structured fields
+
+## What NOT to do
+-Нет util/helpers/common пакетов
+-Нет init(), нет package-level mutable state
+-Нет string-based error comparison
+-Не возвращай интерфейс из конструктора
+
+## Go conventions
+
+-Error handling: всегда оборачивай через fmt.Errorf("описание: %w", err)
+-Interfaces: определяй в пакете-потребителе, не в пакете-реализации
+-Interfaces: 1-3 метода максимум, -er суффикс для single-method
+-"Accept interfaces, return structs"
+-context.Context - первый параметр для I/O функций
+-Каждая горутина - clear shutdown path (context/done channel)
+-Предпочитай sync.Mutex для shared state, каналы для коммуникации
+-Table-driven tests, t.Helper() в хелперах
+-Logging: только slog, structured fields
+-Нет util/helpers/common, singular lowercase package names
+-NewXxx() возвращает*конкретный тип*, не интерфейс
+-Нет init(), нет package-level mutable state
