@@ -71,6 +71,10 @@ func (m *mockService) CloseTicket(ctx context.Context, input CloseTicketInput) (
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
+func (m *mockService) AssignTicket(ctx context.Context, input AssignTicketInput) (domain.Ticket, error) {
+	return domain.Ticket{}, errors.New("not implemented")
+}
+
 func TestAutoCloser_CloseInactiveTickets_Success(t *testing.T) {
 	oldActivity := time.Now().AddDate(0, 0, -10)
 	ticketsToClose := []domain.Ticket{
@@ -214,7 +218,7 @@ func TestCloseTicket_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger())
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
 
 	updated, err := svc.CloseTicket(context.Background(), CloseTicketInput{
 		TicketID: 1,
@@ -247,7 +251,7 @@ func TestCloseTicket_NotResolved(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger())
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
 
 	_, err := svc.CloseTicket(context.Background(), CloseTicketInput{TicketID: 1, UserID: 0})
 	if err == nil {

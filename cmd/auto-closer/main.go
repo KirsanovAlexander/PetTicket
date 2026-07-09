@@ -68,7 +68,9 @@ func run() error {
 	log.Info().Msg("connected to database")
 
 	repo := postgres.NewTicketsRepository(db)
-	service := tickets.NewService(repo, db, appLogger)
+	// eventBus не нужен: auto-closer только закрывает resolved-тикеты
+	// (CloseTicket), а этот флоу не входит в систему доменных событий.
+	service := tickets.NewService(repo, db, appLogger, nil)
 	autoCloser := tickets.NewAutoCloser(service, repo, appLogger,
 		cfg.AutoCloseInactiveDays, cfg.AutoCloseBatchSize,
 	)

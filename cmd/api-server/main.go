@@ -11,7 +11,9 @@ import (
 	"net"
 
 	"pet-ticket/internal/app/tickets"
+	domainEvents "pet-ticket/internal/domain/events"
 	"pet-ticket/internal/infra/config"
+	infraEvents "pet-ticket/internal/infra/events"
 	"pet-ticket/internal/infra/postgres"
 	grpcTransport "pet-ticket/internal/transport/grpc"
 	httpTransport "pet-ticket/internal/transport/http"
@@ -86,8 +88,29 @@ func run() error {
 	// Repository (реализация интерфейса из app слоя)
 	ticketsRepo := postgres.NewTicketsRepository(db)
 
+	// Event bus: HistoryHandler и MetricsHandler подписываются на все 4
+	// доменных события ДО создания Service — Service будет публиковать в
+	// уже настроенную шину.
+	eventBus := infraEvents.NewInMemoryBus()
+
+	historyHandler := tickets.NewHistoryHandler(ticketsRepo, appLogger)
+	metricsHandler := tickets.NewMetricsHandler(appLogger)
+
+	for _, eventName := range []string{
+		domainEvents.EventTicketCreated,
+		domainEvents.EventTicketStatusChanged,
+		domainEvents.EventTicketCommentAdded,
+		domainEvents.EventTicketAssigned,
+	} {
+		eventBus.Subscribe(eventName, metricsHandler.Handle)
+	}
+	eventBus.Subscribe(domainEvents.EventTicketCreated, historyHandler.HandleTicketCreated)
+	eventBus.Subscribe(domainEvents.EventTicketStatusChanged, historyHandler.HandleTicketStatusChanged)
+	eventBus.Subscribe(domainEvents.EventTicketCommentAdded, historyHandler.HandleTicketCommentAdded)
+	eventBus.Subscribe(domainEvents.EventTicketAssigned, historyHandler.HandleTicketAssigned)
+
 	// Service (use cases)
-	ticketsService := tickets.NewService(ticketsRepo, db, appLogger)
+	ticketsService := tickets.NewService(ticketsRepo, db, appLogger, eventBus)
 
 	// Transport (HTTP)
 	transport := httpTransport.New(ticketsService, appLogger, cfg.ENV)

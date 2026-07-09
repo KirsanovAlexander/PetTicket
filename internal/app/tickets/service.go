@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	domainEvents "pet-ticket/internal/domain/events"
 	"pet-ticket/internal/domain/tickets"
+	infraEvents "pet-ticket/internal/infra/events"
 
 	"github.com/rs/zerolog"
 )
@@ -61,6 +63,14 @@ type CloseTicketInput struct {
 	Reason   string
 }
 
+// AssignTicketInput входные данные для назначения тикета оператору
+type AssignTicketInput struct {
+	TicketID   int64
+	OperatorID int64
+	AssignedBy int64
+	Comment    string
+}
+
 // Service определяет бизнес-логику работы с тикетами
 type Service interface {
 	CreateTicket(ctx context.Context, input CreateTicketInput) (tickets.Ticket, error)
@@ -76,14 +86,16 @@ type Service interface {
 	AddComment(ctx context.Context, input AddCommentInput) (tickets.Ticket, error)
 	GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
 	CloseTicket(ctx context.Context, input CloseTicketInput) (tickets.Ticket, error)
+	AssignTicket(ctx context.Context, input AssignTicketInput) (tickets.Ticket, error)
 }
 
 // service реализует интерфейс Service
 type service struct {
-	repo    Repository
-	db      TxBeginner
-	logger  zerolog.Logger
-	slaCalc *SLACalculator
+	repo     Repository
+	db       TxBeginner
+	logger   zerolog.Logger
+	slaCalc  *SLACalculator
+	eventBus infraEvents.Bus
 }
 
 // TxBeginner интерфейс для создания транзакций
@@ -97,13 +109,16 @@ type TxCommitter interface {
 	Rollback() error
 }
 
-// NewService создаёт новый экземпляр сервиса
-func NewService(repo Repository, db TxBeginner, logger zerolog.Logger) Service {
+// NewService создаёт новый экземпляр сервиса. eventBus может быть nil —
+// сервис остаётся полностью рабочим, просто не публикует события (удобно
+// для юнит-тестов, которым публикация событий не важна).
+func NewService(repo Repository, db TxBeginner, logger zerolog.Logger, eventBus infraEvents.Bus) Service {
 	return &service{
-		repo:    repo,
-		db:      db,
-		logger:  logger,
-		slaCalc: NewSLACalculator(repo),
+		repo:     repo,
+		db:       db,
+		logger:   logger,
+		slaCalc:  NewSLACalculator(repo),
+		eventBus: eventBus,
 	}
 }
 
@@ -165,22 +180,22 @@ func (s *service) CreateTicket(ctx context.Context, input CreateTicketInput) (ti
 		return tickets.Ticket{}, fmt.Errorf("failed to create ticket: %w", err)
 	}
 
-	// Добавление записи в историю
-	history := tickets.History{
-		TicketID: created.ID,
-		UserID:   input.UserID,
-		Action:   tickets.ActionCreated,
-		NewValue: fmt.Sprintf("status=%s", created.Status.String()),
-	}
-	if err = s.repo.AddHistory(txCtx, history); err != nil {
-		s.logger.Error().Err(err).Int64("ticket_id", created.ID).Msg("failed to add history")
-		return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
-	}
-
-	// Коммит транзакции
+	// Коммит транзакции. История больше не пишется здесь напрямую — это
+	// делает HistoryHandler, подписанный на ticket.created (событие
+	// публикуется ниже, уже ПОСЛЕ коммита).
 	if err = tx.Commit(); err != nil {
 		s.logger.Error().Err(err).Msg("failed to commit transaction")
 		return tickets.Ticket{}, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	if s.eventBus != nil {
+		_ = s.eventBus.Publish(ctx, domainEvents.TicketCreated{
+			BaseEvent: domainEvents.NewBaseEvent(),
+			TicketID:  created.ID,
+			UserID:    created.UserID,
+			TopicID:   created.TopicID,
+			Status:    created.Status.String(),
+		})
 	}
 
 	s.logger.Info().Int64("ticket_id", created.ID).Msg("ticket created")
@@ -208,6 +223,7 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 	}
 
 	oldStatus := existing.Status
+	oldComment := existing.Comment
 
 	// Обновляем поля
 	if input.Status != nil {
@@ -258,52 +274,35 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 		return tickets.Ticket{}, fmt.Errorf("failed to update ticket: %w", err)
 	}
 
-	// Добавление записи в историю при изменении статуса
-	if input.Status != nil && oldStatus != *input.Status {
-		history := tickets.History{
-			TicketID: updated.ID,
-			UserID:   updated.UserID,
-			Action:   tickets.ActionStatusChanged,
-			OldValue: oldStatus.String(),
-			NewValue: input.Status.String(),
-		}
-		if err = s.repo.AddHistory(txCtx, history); err != nil {
-			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add history")
-			return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
-		}
-	}
-
-	if setResolved {
-		history := tickets.History{
-			TicketID: updated.ID,
-			UserID:   updated.UserID,
-			Action:   tickets.ActionResolved,
-			NewValue: updated.Status.String(),
-		}
-		if err = s.repo.AddHistory(txCtx, history); err != nil {
-			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add resolved history")
-			return tickets.Ticket{}, fmt.Errorf("failed to add history: %w", err)
-		}
-	}
-
-	// Добавление записи в историю при изменении комментария
-	if input.Comment != nil {
-		history := tickets.History{
-			TicketID: updated.ID,
-			UserID:   updated.UserID,
-			Action:   tickets.ActionCommentAdded,
-			NewValue: *input.Comment,
-		}
-		if err = s.repo.AddHistory(txCtx, history); err != nil {
-			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add history for comment")
-			return tickets.Ticket{}, fmt.Errorf("failed to add history for comment: %w", err)
-		}
-	}
-
-	// Коммит транзакции
+	// Коммит транзакции. История статуса/резолва/комментария больше не
+	// пишется здесь напрямую — она уходит в HistoryHandler через события
+	// ниже, публикуемые уже ПОСЛЕ коммита.
 	if err = tx.Commit(); err != nil {
 		s.logger.Error().Err(err).Msg("failed to commit transaction")
 		return tickets.Ticket{}, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	if s.eventBus != nil {
+		if input.Status != nil && oldStatus != *input.Status {
+			_ = s.eventBus.Publish(ctx, domainEvents.TicketStatusChanged{
+				BaseEvent: domainEvents.NewBaseEvent(),
+				TicketID:  updated.ID,
+				OldStatus: oldStatus.String(),
+				NewStatus: input.Status.String(),
+				ChangedBy: updated.UserID,
+				Resolved:  setResolved,
+			})
+		}
+
+		if input.Comment != nil {
+			_ = s.eventBus.Publish(ctx, domainEvents.TicketCommentAdded{
+				BaseEvent:  domainEvents.NewBaseEvent(),
+				TicketID:   updated.ID,
+				UserID:     updated.UserID,
+				OldComment: oldComment,
+				NewComment: *input.Comment,
+			})
+		}
 	}
 
 	s.logger.Info().Int64("ticket_id", updated.ID).Msg("ticket updated")
@@ -600,6 +599,54 @@ func (s *service) CloseTicket(ctx context.Context, input CloseTicketInput) (tick
 		Str("reason", input.Reason).
 		Int64("user_id", input.UserID).
 		Msg("ticket closed")
+
+	return updated, nil
+}
+
+// AssignTicket назначает новый ("new") тикет на оператора: переводит его в
+// статус in_progress через UpdateTicket (это уже публикует
+// ticket.status_changed/ticket.comment_added по обычным правилам) и
+// дополнительно публикует ticket.assigned с ID оператора — для истории
+// назначения, которую события статуса сами по себе не несут.
+func (s *service) AssignTicket(ctx context.Context, input AssignTicketInput) (tickets.Ticket, error) {
+	existing, err := s.repo.GetByID(ctx, input.TicketID)
+	if err != nil {
+		return tickets.Ticket{}, fmt.Errorf("failed to get ticket: %w", err)
+	}
+
+	if existing.Status != tickets.StatusNew {
+		return tickets.Ticket{}, fmt.Errorf("%w: ticket already assigned or in progress", ErrConflict)
+	}
+
+	comment := "Assigned to operator"
+	if input.Comment != "" {
+		comment = input.Comment
+	}
+	status := tickets.StatusInProgress
+
+	updated, err := s.UpdateTicket(ctx, UpdateTicketInput{
+		ID:      input.TicketID,
+		Status:  &status,
+		Comment: &comment,
+	})
+	if err != nil {
+		return tickets.Ticket{}, err
+	}
+
+	if s.eventBus != nil {
+		_ = s.eventBus.Publish(ctx, domainEvents.TicketAssigned{
+			BaseEvent:  domainEvents.NewBaseEvent(),
+			TicketID:   updated.ID,
+			OperatorID: input.OperatorID,
+			AssignedBy: input.AssignedBy,
+		})
+	}
+
+	s.logger.Info().
+		Int64("ticket_id", updated.ID).
+		Int64("operator_id", input.OperatorID).
+		Int64("assigned_by", input.AssignedBy).
+		Msg("ticket assigned")
 
 	return updated, nil
 }
