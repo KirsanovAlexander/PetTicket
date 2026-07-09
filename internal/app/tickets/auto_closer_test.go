@@ -36,6 +36,10 @@ func (m *mockService) ListTickets(ctx context.Context, input ListTicketsInput) (
 	return nil, errors.New("not implemented")
 }
 
+func (m *mockService) ListTicketsWithCursor(ctx context.Context, input ListTicketsWithCursorInput) (CursorPage, error) {
+	return CursorPage{}, errors.New("not implemented")
+}
+
 func (m *mockService) GetTicketHistory(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error) {
 	return nil, errors.New("not implemented")
 }

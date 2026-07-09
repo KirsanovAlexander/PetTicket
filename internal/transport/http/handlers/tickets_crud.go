@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
 
 	"pet-ticket/internal/app/tickets"
@@ -106,6 +107,12 @@ func (h *TicketsHandler) deleteTicket(c *fiber.Ctx) error {
 }
 
 func (h *TicketsHandler) listTickets(c *fiber.Ctx) error {
+	// cursor-пагинация имеет приоритет: если передан cursor ИЛИ page_size,
+	// клиент явно использует новый способ навигации.
+	if c.Query("cursor") != "" || c.Query("page_size") != "" {
+		return h.listTicketsWithCursor(c)
+	}
+
 	limit := c.QueryInt("limit", 20)
 	offset := c.QueryInt("offset", 0)
 
@@ -182,6 +189,93 @@ func (h *TicketsHandler) listTickets(c *fiber.Ctx) error {
 		Total: int64(len(ticketList)),
 	}
 
+	return c.JSON(resp)
+}
+
+// listTicketsWithCursor обрабатывает cursor-пагинацию (см. listTickets —
+// вызывается, когда клиент передал query-параметр cursor или page_size).
+func (h *TicketsHandler) listTicketsWithCursor(c *fiber.Ctx) error {
+	pageSize := c.QueryInt("page_size", tickets.DefaultCursorPageSize)
+	if pageSize < 1 || pageSize > tickets.MaxCursorPageSize {
+		return fiber.NewError(fiber.StatusBadRequest,
+			fmt.Sprintf("page_size must be between 1 and %d", tickets.MaxCursorPageSize))
+	}
+
+	direction := c.Query("direction", "next")
+	if direction != "next" && direction != "prev" {
+		return fiber.NewError(fiber.StatusBadRequest, "direction must be 'next' or 'prev'")
+	}
+
+	var cursor *string
+	if cursorStr := c.Query("cursor"); cursorStr != "" {
+		cursor = &cursorStr
+	}
+
+	var userID, topicID *int64
+	var status *domain.Status
+	var priority *domain.Priority
+
+	if userIDStr := c.Query("userId"); userIDStr != "" {
+		val, err := strconv.ParseInt(userIDStr, 10, 64)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid userId parameter")
+		}
+		userID = &val
+	}
+
+	if topicIDStr := c.Query("topicId"); topicIDStr != "" {
+		val, err := strconv.ParseInt(topicIDStr, 10, 64)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid topicId parameter")
+		}
+		topicID = &val
+	}
+
+	if statusIDStr := c.Query("statusId"); statusIDStr != "" {
+		val, err := strconv.Atoi(statusIDStr)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid statusId parameter")
+		}
+		s := domain.Status(val)
+		if !s.IsValid() {
+			return fiber.NewError(fiber.StatusBadRequest, "statusId must be between 1 and 5")
+		}
+		status = &s
+	}
+
+	if priorityIDStr := c.Query("priorityId"); priorityIDStr != "" {
+		val, err := strconv.Atoi(priorityIDStr)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid priorityId parameter")
+		}
+		p := domain.Priority(val)
+		if !p.IsValid() {
+			return fiber.NewError(fiber.StatusBadRequest, "priorityId must be between 1 and 4")
+		}
+		priority = &p
+	}
+
+	page, err := h.service.ListTicketsWithCursor(c.Context(), tickets.ListTicketsWithCursorInput{
+		UserID:    userID,
+		TopicID:   topicID,
+		Status:    status,
+		Priority:  priority,
+		Cursor:    cursor,
+		PageSize:  pageSize,
+		Direction: direction,
+	})
+	if err != nil {
+		h.logger.Error().Err(err).Msg("failed to list tickets with cursor")
+		return err
+	}
+
+	resp := dto.ListResponseWithPagination{
+		Data: dto.ToTicketResponseList(page.Items),
+		Pagination: dto.PaginationResponse{
+			NextCursor: page.NextCursor,
+			HasMore:    page.HasMore,
+		},
+	}
 	return c.JSON(resp)
 }
 

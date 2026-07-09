@@ -23,8 +23,13 @@ type Repository interface {
 	// Delete удаляет тикет по ID
 	Delete(ctx context.Context, id int64) error
 
-	// List возвращает список тикетов с фильтрацией
+	// List возвращает список тикетов с фильтрацией (offset-пагинация)
 	List(ctx context.Context, filter ListFilter) ([]tickets.Ticket, error)
+
+	// ListWithCursor возвращает список тикетов с cursor-пагинацией.
+	// Запрашивает на 1 запись больше PageSize — если она пришла, hasMore=true
+	// и лишняя запись отбрасывается.
+	ListWithCursor(ctx context.Context, filter ListFilter) (items []tickets.Ticket, hasMore bool, err error)
 
 	// AddHistory добавляет запись в историю тикета
 	AddHistory(ctx context.Context, history tickets.History) error
@@ -67,4 +72,9 @@ type ListFilter struct {
 	Offset   int
 	SortBy   string
 	SortDesc bool
+
+	// Поля для cursor-пагинации (используются только ListWithCursor)
+	Cursor    *string
+	PageSize  int
+	Direction string
 }

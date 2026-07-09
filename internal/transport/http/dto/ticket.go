@@ -86,6 +86,19 @@ type ListResponse struct {
 	Total int64       `json:"total"`
 }
 
+// PaginationResponse описывает состояние cursor-пагинации
+type PaginationResponse struct {
+	NextCursor string `json:"nextCursor,omitempty"`
+	HasMore    bool   `json:"hasMore"`
+}
+
+// ListResponseWithPagination представляет HTTP ответ со списком данных
+// и cursor-пагинацией
+type ListResponseWithPagination struct {
+	Data       interface{}        `json:"data"`
+	Pagination PaginationResponse `json:"pagination"`
+}
+
 // ErrorResponse представляет HTTP ответ с ошибкой
 type ErrorResponse struct {
 	Error ErrorDetail `json:"error"`

@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/pprof"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -54,6 +55,13 @@ func New(svc tickets.Service, logger zerolog.Logger, env string) *Transport {
 func (t *Transport) setupRoutes() {
 	// Метрики endpoint (без auth middleware)
 	t.app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
+
+	// pprof только в dev/local — нельзя открывать профилирование в production,
+	// это утечка информации о рантайме и потенциальный вектор DoS
+	// (например, /debug/pprof/profile блокирует горутину на 30 сек).
+	if t.env != "production" {
+		t.app.Use(pprof.New())
+	}
 
 	// API routes
 	api := t.app.Group("/api/v1")

@@ -308,6 +308,124 @@ func (r *TicketsRepository) List(ctx context.Context, filter tickets.ListFilter)
 	return ticketList, nil
 }
 
+// ListWithCursor возвращает список тикетов с cursor-пагинацией.
+// Для direction="next" (по умолчанию) фильтрует (created_at, id) < cursor и
+// сортирует DESC — движение вглубь истории. Для direction="prev" фильтрует
+// (created_at, id) > cursor, сортирует ASC (чтобы взять ближайшие к cursor
+// записи через LIMIT), а затем разворачивает результат в обычный дисплейный
+// порядок DESC. В обоих случаях запрашивается PageSize+1 строк: если пришла
+// лишняя строка — hasMore=true, и она отбрасывается.
+func (r *TicketsRepository) ListWithCursor(
+	ctx context.Context, filter tickets.ListFilter,
+) ([]domain.Ticket, bool, error) {
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	direction := filter.Direction
+	if direction != "prev" {
+		direction = "next"
+	}
+
+	query := `
+		SELECT ` + ticketSelectColumns + `
+		FROM tickets
+		WHERE 1=1
+	`
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.UserID != nil {
+		query += fmt.Sprintf(" AND user_id = $%d", argPos)
+		args = append(args, *filter.UserID)
+		argPos++
+	}
+
+	if filter.TopicID != nil {
+		query += fmt.Sprintf(" AND topic_id = $%d", argPos)
+		args = append(args, *filter.TopicID)
+		argPos++
+	}
+
+	if filter.Status != nil {
+		query += fmt.Sprintf(" AND status_id = $%d", argPos)
+		args = append(args, int(*filter.Status))
+		argPos++
+	}
+
+	if filter.Priority != nil {
+		query += fmt.Sprintf(" AND priority_id = $%d", argPos)
+		args = append(args, int(*filter.Priority))
+		argPos++
+	}
+
+	if filter.Cursor != nil && *filter.Cursor != "" {
+		createdAt, id, err := tickets.DecodeCursor(*filter.Cursor)
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: %v", tickets.ErrInvalidCursor, err)
+		}
+
+		op := "<"
+		if direction == "prev" {
+			op = ">"
+		}
+		query += fmt.Sprintf(" AND (created_at, id) %s ($%d, $%d)", op, argPos, argPos+1)
+		args = append(args, createdAt, id)
+		argPos += 2
+	}
+
+	sortOrder := "DESC"
+	if direction == "prev" {
+		sortOrder = "ASC"
+	}
+	query += fmt.Sprintf(" ORDER BY created_at %s, id %s", sortOrder, sortOrder)
+
+	// Запрашиваем на 1 запись больше pageSize, чтобы определить hasMore
+	query += " LIMIT $" + strconv.Itoa(argPos) //nolint:gosec // G202: argPos is controlled, not user input
+	args = append(args, pageSize+1)
+
+	rows, err := r.db.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to list tickets with cursor: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = fmt.Errorf("failed to close rows: %w", closeErr)
+		}
+	}()
+
+	var ticketList []domain.Ticket
+	for rows.Next() {
+		ticket, err := scanTicket(rows)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to scan ticket: %w", err)
+		}
+		ticketList = append(ticketList, ticket)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("failed to iterate tickets: %w", err)
+	}
+
+	hasMore := len(ticketList) > pageSize
+	if hasMore {
+		ticketList = ticketList[:pageSize]
+	}
+
+	if direction == "prev" {
+		reverseTicketList(ticketList)
+	}
+
+	return ticketList, hasMore, nil
+}
+
+// reverseTicketList разворачивает список тикетов на месте
+func reverseTicketList(list []domain.Ticket) {
+	for i, j := 0, len(list)-1; i < j; i, j = i+1, j-1 {
+		list[i], list[j] = list[j], list[i]
+	}
+}
+
 // AddHistory добавляет запись в историю тикета
 func (r *TicketsRepository) AddHistory(ctx context.Context, history domain.History) error {
 	query := `

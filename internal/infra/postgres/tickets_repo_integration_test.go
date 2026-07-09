@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,7 +87,10 @@ func setupTestDB(t *testing.T) *testDB {
 // applyMigrations применяет SQL миграции из файлов проекта
 func applyMigrations(db *sql.DB) error {
 	migrationsDir := filepath.Join("..", "..", "..", "internal", "infra", "migration", "migrations")
-	files := []string{"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql", "004_add_last_activity.up.sql"}
+	files := []string{
+		"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql",
+		"004_add_last_activity.up.sql", "005_add_performance_indexes.up.sql",
+	}
 
 	for _, name := range files {
 		migrationSQL, err := os.ReadFile(filepath.Join(migrationsDir, name))
@@ -783,4 +787,116 @@ func BenchmarkTicketsRepository_GetByID(b *testing.B) {
 			b.Fatalf("failed to get ticket: %v", err)
 		}
 	}
+}
+
+// seedTicketsForPagination создаёт N тикетов одного пользователя для
+// бенчмарков пагинации (offset деградирует именно на "глубоких" страницах
+// большого набора данных — на маленьких таблицах разница не проявляется).
+func seedTicketsForPagination(b *testing.B, repo *TicketsRepository, userID int64, n int) {
+	b.Helper()
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		if _, err := repo.Create(ctx, domain.Ticket{
+			UserID:  userID,
+			TopicID: 1,
+			Status:  domain.StatusNew,
+			Comment: "Pagination benchmark ticket",
+		}); err != nil {
+			b.Fatalf("failed to seed ticket: %v", err)
+		}
+	}
+}
+
+const paginationBenchDatasetSize = 2000
+const paginationBenchPageSize = 20
+
+// BenchmarkListTickets_Offset_DeepPage — offset-пагинация на "глубокой"
+// странице: БД обязана отсканировать и отбросить все Offset строк перед
+// LIMIT, поэтому время растёт линейно с глубиной страницы.
+func BenchmarkListTickets_Offset_DeepPage(b *testing.B) {
+	t := &testing.T{}
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	userID := int64(5001)
+	seedTicketsForPagination(b, repo, userID, paginationBenchDatasetSize)
+
+	ctx := context.Background()
+	deepOffset := paginationBenchDatasetSize - paginationBenchPageSize
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := repo.List(ctx, apptickets.ListFilter{
+			UserID: &userID,
+			Limit:  paginationBenchPageSize,
+			Offset: deepOffset,
+		})
+		if err != nil {
+			b.Fatalf("failed to list tickets: %v", err)
+		}
+	}
+}
+
+// BenchmarkListTickets_Cursor_DeepPage — cursor-пагинация на той же глубине:
+// с индексом idx_tickets_created_at_id БД сразу переходит к нужной позиции
+// по (created_at, id), не сканируя предыдущие страницы.
+func BenchmarkListTickets_Cursor_DeepPage(b *testing.B) {
+	t := &testing.T{}
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	userID := int64(5002)
+	seedTicketsForPagination(b, repo, userID, paginationBenchDatasetSize)
+
+	ctx := context.Background()
+
+	// Долистываем до той же глубины один раз вне таймера, чтобы получить
+	// cursor, эквивалентный deepOffset в offset-бенчмарке.
+	cursor, err := cursorAtDepth(ctx, repo, userID, paginationBenchDatasetSize-paginationBenchPageSize)
+	if err != nil {
+		b.Fatalf("failed to compute starting cursor: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, err := repo.ListWithCursor(ctx, apptickets.ListFilter{
+			UserID:    &userID,
+			PageSize:  paginationBenchPageSize,
+			Direction: "next",
+			Cursor:    &cursor,
+		})
+		if err != nil {
+			b.Fatalf("failed to list tickets with cursor: %v", err)
+		}
+	}
+}
+
+// cursorAtDepth пролистывает страницы через ListWithCursor до достижения
+// depth пропущенных записей и возвращает cursor на этой позиции.
+func cursorAtDepth(ctx context.Context, repo *TicketsRepository, userID int64, depth int) (string, error) {
+	var cursor *string
+	seen := 0
+	for seen < depth {
+		items, hasMore, err := repo.ListWithCursor(ctx, apptickets.ListFilter{
+			UserID:    &userID,
+			PageSize:  paginationBenchPageSize,
+			Direction: "next",
+			Cursor:    cursor,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(items) == 0 {
+			break
+		}
+		last := items[len(items)-1]
+		c := apptickets.EncodeCursor(last.CreatedAt, last.ID)
+		cursor = &c
+		seen += len(items)
+		if !hasMore {
+			break
+		}
+	}
+	if cursor == nil {
+		return "", fmt.Errorf("failed to reach depth %d", depth)
+	}
+	return *cursor, nil
 }

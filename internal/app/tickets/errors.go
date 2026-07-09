@@ -20,4 +20,7 @@ var (
 
 	// ErrConflict возвращается при конфликте данных
 	ErrConflict = errors.New("data conflict")
+
+	// ErrInvalidCursor возвращается при невалидном/повреждённом cursor-токене
+	ErrInvalidCursor = errors.New("invalid cursor")
 )
