@@ -43,6 +43,10 @@ func NewErrorHandler(logger zerolog.Logger, env string) fiber.ErrorHandler {
 			code = fiber.StatusForbidden
 			errorCode = "UNAUTHORIZED"
 			message = "you don't have permission to access this resource"
+		case errors.Is(err, tickets.ErrInvalidCursor):
+			code = fiber.StatusBadRequest
+			errorCode = "INVALID_CURSOR"
+			message = "cursor is invalid or malformed"
 		}
 
 		// Request ID для трейсинга

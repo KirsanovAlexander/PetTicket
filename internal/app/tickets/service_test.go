@@ -36,6 +36,7 @@ type mockRepository struct {
 	updateFunc      func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error)
 	deleteFunc      func(ctx context.Context, id int64) error
 	listFunc        func(ctx context.Context, filter ListFilter) ([]domain.Ticket, error)
+	listWithCursorFunc func(ctx context.Context, filter ListFilter) ([]domain.Ticket, bool, error)
 	addHistoryFunc  func(ctx context.Context, history domain.History) error
 	getHistoryFunc  func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
 	getStatusesFunc func(ctx context.Context) ([]StatusInfo, error)
@@ -79,6 +80,13 @@ func (m *mockRepository) List(ctx context.Context, filter ListFilter) ([]domain.
 		return m.listFunc(ctx, filter)
 	}
 	return nil, errors.New("not implemented")
+}
+
+func (m *mockRepository) ListWithCursor(ctx context.Context, filter ListFilter) ([]domain.Ticket, bool, error) {
+	if m.listWithCursorFunc != nil {
+		return m.listWithCursorFunc(ctx, filter)
+	}
+	return nil, false, errors.New("not implemented")
 }
 
 func (m *mockRepository) AddHistory(ctx context.Context, history domain.History) error {

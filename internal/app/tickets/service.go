@@ -48,6 +48,24 @@ type ListTicketsInput struct {
 	SortDesc bool
 }
 
+// ListTicketsWithCursorInput входные данные для cursor-пагинации списка тикетов
+type ListTicketsWithCursorInput struct {
+	UserID    *int64
+	TopicID   *int64
+	Status    *tickets.Status
+	Priority  *tickets.Priority
+	Cursor    *string
+	PageSize  int
+	Direction string
+}
+
+// CursorPage представляет одну страницу cursor-пагинации
+type CursorPage struct {
+	Items      []tickets.Ticket
+	NextCursor string
+	HasMore    bool
+}
+
 // AddCommentInput входные данные для добавления комментария
 type AddCommentInput struct {
 	TicketID         int64
@@ -78,6 +96,7 @@ type Service interface {
 	UpdateTicket(ctx context.Context, input UpdateTicketInput) (tickets.Ticket, error)
 	DeleteTicket(ctx context.Context, id int64) error
 	ListTickets(ctx context.Context, input ListTicketsInput) ([]tickets.Ticket, error)
+	ListTicketsWithCursor(ctx context.Context, input ListTicketsWithCursorInput) (CursorPage, error)
 	GetTicketHistory(ctx context.Context, ticketID int64, limit, offset int) ([]tickets.History, error)
 	GetAllStatuses(ctx context.Context) ([]StatusInfo, error)
 	GetAllTopics(ctx context.Context) ([]tickets.Topic, error)
@@ -322,7 +341,16 @@ func (s *service) DeleteTicket(ctx context.Context, id int64) error {
 
 // ListTickets возвращает список тикетов
 func (s *service) ListTickets(ctx context.Context, input ListTicketsInput) ([]tickets.Ticket, error) {
-	filter := ListFilter(input)
+	filter := ListFilter{
+		UserID:   input.UserID,
+		TopicID:  input.TopicID,
+		Status:   input.Status,
+		Priority: input.Priority,
+		Limit:    input.Limit,
+		Offset:   input.Offset,
+		SortBy:   input.SortBy,
+		SortDesc: input.SortDesc,
+	}
 
 	list, err := s.repo.List(ctx, filter)
 	if err != nil {
@@ -331,6 +359,54 @@ func (s *service) ListTickets(ctx context.Context, input ListTicketsInput) ([]ti
 	}
 
 	return list, nil
+}
+
+// ListTicketsWithCursor возвращает страницу тикетов через cursor-пагинацию.
+// direction по умолчанию "next" (движение вглубь истории), pageSize по
+// умолчанию DefaultCursorPageSize, ограничен MaxCursorPageSize.
+func (s *service) ListTicketsWithCursor(ctx context.Context, input ListTicketsWithCursorInput) (CursorPage, error) {
+	pageSize := input.PageSize
+	if pageSize <= 0 {
+		pageSize = DefaultCursorPageSize
+	}
+	if pageSize > MaxCursorPageSize {
+		pageSize = MaxCursorPageSize
+	}
+
+	direction := input.Direction
+	if direction != "prev" {
+		direction = "next"
+	}
+
+	filter := ListFilter{
+		UserID:    input.UserID,
+		TopicID:   input.TopicID,
+		Status:    input.Status,
+		Priority:  input.Priority,
+		Cursor:    input.Cursor,
+		PageSize:  pageSize,
+		Direction: direction,
+	}
+
+	items, hasMore, err := s.repo.ListWithCursor(ctx, filter)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("failed to list tickets with cursor")
+		return CursorPage{}, fmt.Errorf("failed to list tickets with cursor: %w", err)
+	}
+
+	var nextCursor string
+	if hasMore && len(items) > 0 {
+		// Для "next" продолжаем от последней (самой старой) записи страницы.
+		// Для "prev" после разворота результата в дисплейный порядок (DESC)
+		// самая новая запись — первая, от неё и продолжаем движение назад.
+		anchor := items[len(items)-1]
+		if direction == "prev" {
+			anchor = items[0]
+		}
+		nextCursor = EncodeCursor(anchor.CreatedAt, anchor.ID)
+	}
+
+	return CursorPage{Items: items, NextCursor: nextCursor, HasMore: hasMore}, nil
 }
 
 // GetTicketHistory возвращает историю изменений тикета
