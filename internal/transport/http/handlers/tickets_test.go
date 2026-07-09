@@ -32,6 +32,7 @@ type mockTicketsService struct {
 	addCommentFunc       func(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error)
 	getSLAViolationsFunc func(ctx context.Context) ([]domain.Ticket, error)
 	closeTicketFunc      func(ctx context.Context, input tickets.CloseTicketInput) (domain.Ticket, error)
+	assignTicketFunc     func(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error)
 }
 
 func (m *mockTicketsService) CreateTicket(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error) {
@@ -121,6 +122,13 @@ func (m *mockTicketsService) GetSLAViolations(ctx context.Context) ([]domain.Tic
 func (m *mockTicketsService) CloseTicket(ctx context.Context, input tickets.CloseTicketInput) (domain.Ticket, error) {
 	if m.closeTicketFunc != nil {
 		return m.closeTicketFunc(ctx, input)
+	}
+	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) AssignTicket(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error) {
+	if m.assignTicketFunc != nil {
+		return m.assignTicketFunc(ctx, input)
 	}
 	return domain.Ticket{}, errors.New("not implemented")
 }

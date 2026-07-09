@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"strconv"
 
 	"pet-ticket/internal/app/tickets"
@@ -31,30 +32,19 @@ func (h *TicketsHandler) assignTicket(c *fiber.Ctx) error {
 	// Получаем текущий userID из контекста (установлен AuthMiddleware)
 	userID := c.Locals("userID").(int64)
 
-	// Получаем тикет
-	ticket, err := h.service.GetTicket(c.Context(), ticketID)
-	if err != nil {
-		return err
-	}
-
-	// Проверяем, что тикет ещё не назначен (бизнес-правило)
-	if ticket.Status != domain.StatusNew {
-		return fiber.NewError(fiber.StatusConflict, "ticket already assigned or in progress")
-	}
-
-	// Обновляем статус на "in_progress"
-	status := domain.StatusInProgress
-	comment := "Assigned to operator"
-	if req.Comment != "" {
-		comment = req.Comment
-	}
-
-	updated, err := h.service.UpdateTicket(c.Context(), tickets.UpdateTicketInput{
-		ID:      ticketID,
-		Status:  &status,
-		Comment: &comment,
+	// Бизнес-правило "тикет ещё не назначен" и сам перевод в in_progress
+	// теперь внутри Service.AssignTicket — оно же публикует ticket.assigned
+	// (и, транзитивно через UpdateTicket, ticket.status_changed/ticket.comment_added).
+	updated, err := h.service.AssignTicket(c.Context(), tickets.AssignTicketInput{
+		TicketID:   ticketID,
+		OperatorID: req.OperatorID,
+		AssignedBy: userID,
+		Comment:    req.Comment,
 	})
 	if err != nil {
+		if errors.Is(err, tickets.ErrConflict) {
+			return fiber.NewError(fiber.StatusConflict, "ticket already assigned or in progress")
+		}
 		return err
 	}
 

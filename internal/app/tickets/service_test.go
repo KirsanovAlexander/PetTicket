@@ -6,10 +6,26 @@ import (
 	"io"
 	"testing"
 
+	domainEvents "pet-ticket/internal/domain/events"
 	domain "pet-ticket/internal/domain/tickets"
+	infraEvents "pet-ticket/internal/infra/events"
 
 	"github.com/rs/zerolog"
 )
+
+// mockEventBus — мок infraEvents.Bus для тестов сервиса. Subscribe — no-op
+// (сервис только публикует, подписку тестируют bus_test.go и
+// event_handlers_test.go), Publish запоминает все события в порядке публикации.
+type mockEventBus struct {
+	published []domainEvents.Event
+}
+
+func (m *mockEventBus) Subscribe(eventName string, handler infraEvents.Handler) {}
+
+func (m *mockEventBus) Publish(ctx context.Context, event domainEvents.Event) error {
+	m.published = append(m.published, event)
+	return nil
+}
 
 // mockRepository — мок репозитория для тестов
 //
@@ -176,7 +192,7 @@ func TestGetTicket_Success(t *testing.T) {
 
 	db := &mockDB{}
 	logger := testLogger()
-	svc := NewService(repo, db, logger)
+	svc := NewService(repo, db, logger, nil)
 
 	// Act
 	ticket, err := svc.GetTicket(context.Background(), 1)
@@ -204,7 +220,7 @@ func TestGetTicket_NotFound(t *testing.T) {
 
 	db := &mockDB{}
 	logger := testLogger()
-	svc := NewService(repo, db, logger)
+	svc := NewService(repo, db, logger, nil)
 
 	// Act
 	_, err := svc.GetTicket(context.Background(), 999)
@@ -215,11 +231,12 @@ func TestGetTicket_NotFound(t *testing.T) {
 	}
 }
 
-// TestCreateTicket_Success — успешное создание тикета
+// TestCreateTicket_Success — успешное создание тикета. История больше не
+// пишется сервисом напрямую (см. TestCreateTicket_PublishesEvent) — её
+// пишет HistoryHandler по событию ticket.created.
 func TestCreateTicket_Success(t *testing.T) {
 	// Arrange
 	var capturedTicket domain.Ticket
-	var capturedHistory domain.History
 	committed := false
 
 	repo := &mockRepository{
@@ -227,10 +244,6 @@ func TestCreateTicket_Success(t *testing.T) {
 			capturedTicket = ticket
 			ticket.ID = 42
 			return ticket, nil
-		},
-		addHistoryFunc: func(ctx context.Context, history domain.History) error {
-			capturedHistory = history
-			return nil
 		},
 	}
 
@@ -246,7 +259,7 @@ func TestCreateTicket_Success(t *testing.T) {
 	}
 
 	logger := testLogger()
-	svc := NewService(repo, db, logger)
+	svc := NewService(repo, db, logger, nil)
 
 	input := CreateTicketInput{
 		UserID:  100,
@@ -270,11 +283,64 @@ func TestCreateTicket_Success(t *testing.T) {
 	if capturedTicket.Priority != domain.PriorityMedium {
 		t.Errorf("expected default priority medium, got %s", capturedTicket.Priority.String())
 	}
-	if capturedHistory.Action != domain.ActionCreated {
-		t.Errorf("expected history action 'created', got %s", capturedHistory.Action)
-	}
 	if !committed {
 		t.Error("expected transaction to be committed")
+	}
+}
+
+// TestCreateTicket_PublishesEvent — CreateTicket публикует ticket.created
+// ПОСЛЕ коммита транзакции, с корректными полями события.
+func TestCreateTicket_PublishesEvent(t *testing.T) {
+	repo := &mockRepository{
+		createFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			ticket.ID = 42
+			return ticket, nil
+		},
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, &mockDB{}, testLogger(), bus)
+
+	_, err := svc.CreateTicket(context.Background(), CreateTicketInput{
+		UserID:  100,
+		TopicID: 7,
+		Comment: "Test ticket",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if len(bus.published) != 1 {
+		t.Fatalf("expected exactly 1 published event, got %d", len(bus.published))
+	}
+
+	event, ok := bus.published[0].(domainEvents.TicketCreated)
+	if !ok {
+		t.Fatalf("expected TicketCreated event, got %T", bus.published[0])
+	}
+	if event.TicketID != 42 || event.UserID != 100 || event.TopicID != 7 {
+		t.Errorf("unexpected event fields: %+v", event)
+	}
+	if event.Status != domain.StatusNew.String() {
+		t.Errorf("expected status 'new', got %s", event.Status)
+	}
+	if event.OccurredAt().IsZero() {
+		t.Error("expected OccurredAt to be set")
+	}
+}
+
+// TestCreateTicket_NoEventBus_DoesNotPanic — сервис с eventBus=nil
+// (стандартная настройка для юнит-тестов) не публикует события и не падает.
+func TestCreateTicket_NoEventBus_DoesNotPanic(t *testing.T) {
+	repo := &mockRepository{
+		createFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			ticket.ID = 1
+			return ticket, nil
+		},
+	}
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+
+	if _, err := svc.CreateTicket(context.Background(), CreateTicketInput{UserID: 1, TopicID: 1, Comment: "x"}); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 
@@ -284,7 +350,7 @@ func TestCreateTicket_InvalidInput(t *testing.T) {
 	repo := &mockRepository{}
 	db := &mockDB{}
 	logger := testLogger()
-	svc := NewService(repo, db, logger)
+	svc := NewService(repo, db, logger, nil)
 
 	tests := []struct {
 		name  string
@@ -321,7 +387,9 @@ func TestCreateTicket_InvalidInput(t *testing.T) {
 	}
 }
 
-// TestUpdateTicket_StatusChange — обновление статуса с историей
+// TestUpdateTicket_StatusChange — обновление статуса тикета. Запись истории
+// теперь не проверяется здесь напрямую (см. TestUpdateTicket_PublishesStatusChangedEvent) —
+// её пишет HistoryHandler по событию ticket.status_changed.
 func TestUpdateTicket_StatusChange(t *testing.T) {
 	// Arrange
 	existingTicket := domain.Ticket{
@@ -333,7 +401,6 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 		Comment:  "Original comment",
 	}
 
-	var capturedHistory domain.History
 	committed := false
 
 	repo := &mockRepository{
@@ -342,10 +409,6 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 		},
 		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
 			return ticket, nil
-		},
-		addHistoryFunc: func(ctx context.Context, history domain.History) error {
-			capturedHistory = history
-			return nil
 		},
 	}
 
@@ -361,7 +424,7 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 	}
 
 	logger := testLogger()
-	svc := NewService(repo, db, logger)
+	svc := NewService(repo, db, logger, nil)
 
 	newStatus := domain.StatusInProgress
 	input := UpdateTicketInput{
@@ -379,21 +442,150 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 	if ticket.Status != domain.StatusInProgress {
 		t.Errorf("expected status in_progress, got %s", ticket.Status.String())
 	}
-	if capturedHistory.Action != domain.ActionStatusChanged {
-		t.Errorf("expected history action 'status_changed', got %s", capturedHistory.Action)
-	}
-	if capturedHistory.OldValue != "new" {
-		t.Errorf("expected old value 'new', got %s", capturedHistory.OldValue)
-	}
-	if capturedHistory.NewValue != "in_progress" {
-		t.Errorf("expected new value 'in_progress', got %s", capturedHistory.NewValue)
-	}
 	if !committed {
 		t.Error("expected transaction to be committed")
 	}
 }
 
-// TestUpdateTicket_TransactionRollback — откат при ошибке истории
+// TestUpdateTicket_PublishesStatusChangedEvent — статус меняется -> событие
+// публикуется ПОСЛЕ коммита, с корректными OldStatus/NewStatus/ChangedBy.
+func TestUpdateTicket_PublishesStatusChangedEvent(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:      1,
+		UserID:  100,
+		TopicID: 1,
+		Status:  domain.StatusNew,
+		Comment: "Original comment",
+	}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, &mockDB{}, testLogger(), bus)
+
+	newStatus := domain.StatusInProgress
+	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if len(bus.published) != 1 {
+		t.Fatalf("expected exactly 1 published event, got %d", len(bus.published))
+	}
+	event, ok := bus.published[0].(domainEvents.TicketStatusChanged)
+	if !ok {
+		t.Fatalf("expected TicketStatusChanged event, got %T", bus.published[0])
+	}
+	if event.TicketID != 1 || event.ChangedBy != 100 {
+		t.Errorf("unexpected event fields: %+v", event)
+	}
+	if event.OldStatus != "new" || event.NewStatus != "in_progress" {
+		t.Errorf("expected new -> in_progress, got %s -> %s", event.OldStatus, event.NewStatus)
+	}
+	if event.Resolved {
+		t.Error("expected Resolved=false for new -> in_progress")
+	}
+}
+
+// TestUpdateTicket_PublishesStatusChangedEvent_ResolvedFlag — переход,
+// который SLACalculator считает моментом решения (new -> closed), помечает
+// событие Resolved=true — так HistoryHandler узнаёт, что нужно дописать
+// дополнительную запись с action=resolved.
+func TestUpdateTicket_PublishesStatusChangedEvent_ResolvedFlag(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:      1,
+		UserID:  100,
+		TopicID: 1,
+		Status:  domain.StatusNew,
+		Comment: "Original comment",
+	}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, &mockDB{}, testLogger(), bus)
+
+	newStatus := domain.StatusClosed
+	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	event, ok := bus.published[0].(domainEvents.TicketStatusChanged)
+	if !ok {
+		t.Fatalf("expected TicketStatusChanged event, got %T", bus.published[0])
+	}
+	if !event.Resolved {
+		t.Error("expected Resolved=true for new -> closed")
+	}
+}
+
+// TestUpdateTicket_PublishesCommentAddedEvent — комментарий меняется ->
+// событие публикуется с OldComment/NewComment.
+func TestUpdateTicket_PublishesCommentAddedEvent(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:      1,
+		UserID:  100,
+		TopicID: 1,
+		Status:  domain.StatusNew,
+		Comment: "old comment",
+	}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, &mockDB{}, testLogger(), bus)
+
+	newComment := "new comment"
+	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Comment: &newComment}); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if len(bus.published) != 1 {
+		t.Fatalf("expected exactly 1 published event, got %d", len(bus.published))
+	}
+	event, ok := bus.published[0].(domainEvents.TicketCommentAdded)
+	if !ok {
+		t.Fatalf("expected TicketCommentAdded event, got %T", bus.published[0])
+	}
+	if event.TicketID != 1 || event.UserID != 100 {
+		t.Errorf("unexpected event fields: %+v", event)
+	}
+	if event.OldComment != "old comment" || event.NewComment != "new comment" {
+		t.Errorf("expected 'old comment' -> 'new comment', got %s -> %s", event.OldComment, event.NewComment)
+	}
+}
+
+// TestUpdateTicket_NoEventsWhenNothingChanges — UpdateTicket без Status и
+// Comment не публикует ни одного события.
+func TestUpdateTicket_NoEventsWhenNothingChanges(t *testing.T) {
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "x"}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, &mockDB{}, testLogger(), bus)
+
+	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1}); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if len(bus.published) != 0 {
+		t.Errorf("expected no events published, got %d: %+v", len(bus.published), bus.published)
+	}
+}
+
+// TestUpdateTicket_TransactionRollback — откат при ошибке сохранения тикета.
+// История/события больше не пишутся внутри транзакции (см. комментарий в
+// service.go), поэтому здесь ошибку теперь имитирует repo.Update, а не
+// AddHistory — это единственная операция с БД, которая всё ещё выполняется
+// в транзакции для UpdateTicket.
 func TestUpdateTicket_TransactionRollback(t *testing.T) {
 	// Arrange
 	existingTicket := domain.Ticket{
@@ -412,10 +604,7 @@ func TestUpdateTicket_TransactionRollback(t *testing.T) {
 			return existingTicket, nil
 		},
 		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
-			return ticket, nil
-		},
-		addHistoryFunc: func(ctx context.Context, history domain.History) error {
-			return errors.New("database error")
+			return domain.Ticket{}, errors.New("database error")
 		},
 	}
 
@@ -431,7 +620,7 @@ func TestUpdateTicket_TransactionRollback(t *testing.T) {
 	}
 
 	logger := testLogger()
-	svc := NewService(repo, db, logger)
+	svc := NewService(repo, db, logger, nil)
 
 	newStatus := domain.StatusInProgress
 	input := UpdateTicketInput{
@@ -461,12 +650,9 @@ func TestCreateTicket_WithPriority(t *testing.T) {
 			ticket.ID = 1
 			return ticket, nil
 		},
-		addHistoryFunc: func(ctx context.Context, history domain.History) error {
-			return nil
-		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger())
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
 	priority := domain.PriorityHigh
 
 	_, err := svc.CreateTicket(context.Background(), CreateTicketInput{
@@ -508,7 +694,7 @@ func TestUpdatePriority_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger())
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
 
 	updated, err := svc.UpdatePriority(context.Background(), 1, domain.PriorityHigh, 100)
 	if err != nil {
@@ -550,7 +736,7 @@ func TestEscalateTicket_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger())
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
 
 	updated, err := svc.EscalateTicket(context.Background(), 1, 100)
 	if err != nil {
@@ -586,7 +772,7 @@ func TestEscalateTicket_MaxPriority(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger())
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
 
 	updated, err := svc.EscalateTicket(context.Background(), 1, 100)
 	if err != nil {
@@ -597,6 +783,113 @@ func TestEscalateTicket_MaxPriority(t *testing.T) {
 	}
 	if updateCalled {
 		t.Error("expected no update when priority is already critical")
+	}
+}
+
+// TestAssignTicket_Success — назначение нового тикета на оператора переводит
+// его в in_progress (через UpdateTicket) и публикует ticket.assigned поверх
+// обычных status_changed/comment_added событий.
+func TestAssignTicket_Success(t *testing.T) {
+	existingTicket := domain.Ticket{
+		ID:      1,
+		UserID:  100,
+		TopicID: 1,
+		Status:  domain.StatusNew,
+		Comment: "Original comment",
+	}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, &mockDB{}, testLogger(), bus)
+
+	updated, err := svc.AssignTicket(context.Background(), AssignTicketInput{
+		TicketID:   1,
+		OperatorID: 55,
+		AssignedBy: 100,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if updated.Status != domain.StatusInProgress {
+		t.Errorf("expected status in_progress, got %s", updated.Status.String())
+	}
+
+	// UpdateTicket публикует status_changed (new -> in_progress) и
+	// comment_added (дефолтный комментарий "Assigned to operator"),
+	// AssignTicket сверху публикует assigned.
+	if len(bus.published) != 3 {
+		t.Fatalf("expected 3 published events (status_changed, comment_added, assigned), got %d: %+v", len(bus.published), bus.published)
+	}
+
+	if _, ok := bus.published[0].(domainEvents.TicketStatusChanged); !ok {
+		t.Errorf("expected event[0] to be TicketStatusChanged, got %T", bus.published[0])
+	}
+	if _, ok := bus.published[1].(domainEvents.TicketCommentAdded); !ok {
+		t.Errorf("expected event[1] to be TicketCommentAdded, got %T", bus.published[1])
+	}
+
+	assigned, ok := bus.published[2].(domainEvents.TicketAssigned)
+	if !ok {
+		t.Fatalf("expected event[2] to be TicketAssigned, got %T", bus.published[2])
+	}
+	if assigned.TicketID != 1 || assigned.OperatorID != 55 || assigned.AssignedBy != 100 {
+		t.Errorf("unexpected assigned event fields: %+v", assigned)
+	}
+}
+
+// TestAssignTicket_CustomComment — переданный комментарий используется
+// вместо дефолтного "Assigned to operator".
+func TestAssignTicket_CustomComment(t *testing.T) {
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "x"}
+
+	var capturedComment string
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			capturedComment = ticket.Comment
+			return ticket, nil
+		},
+	}
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+
+	_, err := svc.AssignTicket(context.Background(), AssignTicketInput{
+		TicketID:   1,
+		OperatorID: 55,
+		AssignedBy: 100,
+		Comment:    "Please handle ASAP",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if capturedComment != "Please handle ASAP" {
+		t.Errorf("expected custom comment to be used, got %q", capturedComment)
+	}
+}
+
+// TestAssignTicket_AlreadyAssigned_ReturnsConflict — тикет не в статусе
+// "new" -> ErrConflict, repo.Update не вызывается.
+func TestAssignTicket_AlreadyAssigned_ReturnsConflict(t *testing.T) {
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusInProgress, Comment: "x"}
+
+	updateCalled := false
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
+			updateCalled = true
+			return ticket, nil
+		},
+	}
+	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+
+	_, err := svc.AssignTicket(context.Background(), AssignTicketInput{TicketID: 1, OperatorID: 55, AssignedBy: 100})
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("expected ErrConflict, got: %v", err)
+	}
+	if updateCalled {
+		t.Error("expected repo.Update NOT to be called when ticket is already assigned")
 	}
 }
 

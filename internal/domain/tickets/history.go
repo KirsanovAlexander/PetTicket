@@ -15,6 +15,7 @@ const (
 	ActionFirstResponse   HistoryAction = "first_response"
 	ActionResolved        HistoryAction = "resolved"
 	ActionAutoClosed      HistoryAction = "auto_closed"
+	ActionAssigned        HistoryAction = "assigned"
 )
 
 // History представляет запись в истории изменений тикета
