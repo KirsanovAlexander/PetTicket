@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"pet-ticket/internal/app/tickets"
 	domain "pet-ticket/internal/domain/tickets"
@@ -424,6 +425,269 @@ func reverseTicketList(list []domain.Ticket) {
 	for i, j := 0, len(list)-1; i < j; i, j = i+1, j-1 {
 		list[i], list[j] = list[j], list[i]
 	}
+}
+
+const ticketFullSelectColumns = `
+	t.id, t.user_id, t.status_id, t.priority_id, t.amount, t.comment,
+	t.response_deadline, t.resolution_deadline, t.first_response_at, t.resolved_at,
+	t.created_at, t.updated_at,
+	s.name, s.description,
+	tp.id, tp.external_id, tp.title, tp.description
+`
+
+const ticketFullFromJoin = `
+	FROM tickets t
+	JOIN ticket_statuses s ON t.status_id = s.id
+	JOIN ticket_topics tp ON t.topic_id = tp.id
+`
+
+// scanTicketFullRow сканирует строку JOIN-запроса (tickets + ticket_statuses +
+// ticket_topics) в domain.TicketFull и досчитывает SLA из уже прочитанных
+// дедлайнов — без дополнительных запросов к БД. Comments и Assignee сюда не
+// входят: это отдельные выборки (см. getTicketComments/getTicketAssignee),
+// вызывающая сторона решает, нужны ли они.
+func scanTicketFullRow(scanner interface {
+	Scan(dest ...any) error
+}) (domain.TicketFull, error) {
+	var full domain.TicketFull
+	var statusID, priorityID int
+	var responseDeadline, resolutionDeadline, firstResponseAt, resolvedAt sql.NullTime
+
+	err := scanner.Scan(
+		&full.ID, &full.User.ID, &statusID, &priorityID, &full.Amount, &full.Comment,
+		&responseDeadline, &resolutionDeadline, &firstResponseAt, &resolvedAt,
+		&full.CreatedAt, &full.UpdatedAt,
+		&full.Status.Name, &full.Status.DisplayName,
+		&full.Topic.ID, &full.Topic.ExternalID, &full.Topic.Title, &full.Topic.Description,
+	)
+	if err != nil {
+		return domain.TicketFull{}, err
+	}
+
+	full.Status.ID = statusID
+	full.Priority = domain.Priority(priorityID)
+
+	var responseDeadlineTime, resolutionDeadlineTime time.Time
+	if responseDeadline.Valid {
+		responseDeadlineTime = responseDeadline.Time
+	}
+	if resolutionDeadline.Valid {
+		resolutionDeadlineTime = resolutionDeadline.Time
+	}
+
+	var firstResponseAtPtr, resolvedAtPtr *time.Time
+	if firstResponseAt.Valid {
+		t := firstResponseAt.Time
+		firstResponseAtPtr = &t
+	}
+	if resolvedAt.Valid {
+		t := resolvedAt.Time
+		resolvedAtPtr = &t
+	}
+
+	metrics := domain.CalculateSLAStatus(
+		full.CreatedAt, responseDeadlineTime, resolutionDeadlineTime,
+		firstResponseAtPtr, resolvedAtPtr, time.Now(),
+	)
+	full.SLA = &domain.SLAInfo{
+		ResponseDeadline:   responseDeadlineTime,
+		ResolutionDeadline: resolutionDeadlineTime,
+		ResponseStatus:     metrics.ResponseStatus,
+		ResolutionStatus:   metrics.ResolutionStatus,
+		OverallStatus:      metrics.OverallStatus,
+	}
+
+	return full, nil
+}
+
+// GetFullByID возвращает тикет со всеми связями, раскрытыми во вложенные
+// объекты (v2 API).
+func (r *TicketsRepository) GetFullByID(ctx context.Context, id int64) (domain.TicketFull, error) {
+	query := `SELECT ` + ticketFullSelectColumns + ticketFullFromJoin + ` WHERE t.id = $1`
+
+	full, err := scanTicketFullRow(r.db.conn.QueryRowContext(ctx, query, id))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.TicketFull{}, tickets.ErrNotFound
+		}
+		return domain.TicketFull{}, fmt.Errorf("failed to get full ticket: %w", err)
+	}
+
+	comments, err := r.getTicketComments(ctx, id)
+	if err != nil {
+		return domain.TicketFull{}, err
+	}
+	full.Comments = comments
+
+	assignee, err := r.getTicketAssignee(ctx, id)
+	if err != nil {
+		return domain.TicketFull{}, err
+	}
+	full.Assignee = assignee
+
+	return full, nil
+}
+
+// ListFull возвращает список тикетов с раскрытыми статусом/темой.
+// Фильтрация и сортировка дублируют логику List() — сознательно не
+// вынесены в общий хелпер, чтобы не рефакторить уже рабочий List() без
+// возможности прогнать компилятор в этой сессии (см. итоговое сообщение).
+func (r *TicketsRepository) ListFull(ctx context.Context, filter tickets.ListFilter) ([]domain.TicketFull, error) {
+	query := `SELECT ` + ticketFullSelectColumns + ticketFullFromJoin + ` WHERE 1=1`
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.UserID != nil {
+		query += fmt.Sprintf(" AND t.user_id = $%d", argPos)
+		args = append(args, *filter.UserID)
+		argPos++
+	}
+
+	if filter.TopicID != nil {
+		query += fmt.Sprintf(" AND t.topic_id = $%d", argPos)
+		args = append(args, *filter.TopicID)
+		argPos++
+	}
+
+	if filter.Status != nil {
+		query += fmt.Sprintf(" AND t.status_id = $%d", argPos)
+		args = append(args, int(*filter.Status))
+		argPos++
+	}
+
+	if filter.Priority != nil {
+		query += fmt.Sprintf(" AND t.priority_id = $%d", argPos)
+		args = append(args, int(*filter.Priority))
+		argPos++
+	}
+
+	allowedSortFields := map[string]bool{
+		"id":          true,
+		"user_id":     true,
+		"topic_id":    true,
+		"status_id":   true,
+		"priority_id": true,
+		"amount":      true,
+		"created_at":  true,
+		"updated_at":  true,
+	}
+
+	sortBy := "created_at"
+	if filter.SortBy != "" && allowedSortFields[filter.SortBy] {
+		sortBy = filter.SortBy
+	}
+
+	sortOrder := "DESC"
+	if !filter.SortDesc {
+		sortOrder = "ASC"
+	}
+	query += fmt.Sprintf(" ORDER BY t.%s %s", sortBy, sortOrder)
+
+	if filter.Limit > 0 {
+		query += " LIMIT $" + strconv.Itoa(argPos) //nolint:gosec // G202: argPos is controlled, not user input
+		args = append(args, filter.Limit)
+		argPos++
+	}
+
+	if filter.Offset > 0 {
+		query += " OFFSET $" + strconv.Itoa(argPos) //nolint:gosec // G202: argPos is controlled, not user input
+		args = append(args, filter.Offset)
+	}
+
+	rows, err := r.db.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list full tickets: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = fmt.Errorf("failed to close rows: %w", closeErr)
+		}
+	}()
+
+	var list []domain.TicketFull
+	for rows.Next() {
+		full, err := scanTicketFullRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan full ticket: %w", err)
+		}
+		list = append(list, full)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate full tickets: %w", err)
+	}
+
+	return list, nil
+}
+
+// getTicketComments возвращает комментарии тикета, реконструированные из
+// ticket_history (записи action=comment_added, new_value = текст).
+// Отдельной таблицы комментариев в системе нет.
+func (r *TicketsRepository) getTicketComments(ctx context.Context, ticketID int64) ([]domain.Comment, error) {
+	query := `
+		SELECT id, user_id, new_value, created_at
+		FROM ticket_history
+		WHERE ticket_id = $1 AND action = $2
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.db.conn.QueryContext(ctx, query, ticketID, string(domain.ActionCommentAdded))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ticket comments: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = fmt.Errorf("failed to close rows: %w", closeErr)
+		}
+	}()
+
+	var comments []domain.Comment
+	for rows.Next() {
+		var c domain.Comment
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Text, &c.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan comment: %w", err)
+		}
+		comments = append(comments, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate comments: %w", err)
+	}
+
+	return comments, nil
+}
+
+// getTicketAssignee возвращает оператора, назначенного на тикет — либо nil,
+// если тикет не назначен. ВАЖНО: в схеме БД нет отдельной колонки
+// assigned_to/operator_id — единственный след назначения оператора живёт в
+// ticket_history как action=assigned с new_value вида "operator=<id>" (см.
+// HistoryHandler.HandleTicketAssigned в app/tickets/event_handlers.go).
+// Поэтому assignee здесь — best-effort парсинг последней такой записи, а не
+// чтение нормальной колонки. Осознанный компромисс, чтобы не тащить в Task 9
+// (версионирование API) миграцию схемы и ripple по Create/Update/scanTicket.
+func (r *TicketsRepository) getTicketAssignee(ctx context.Context, ticketID int64) (*domain.User, error) {
+	query := `
+		SELECT new_value
+		FROM ticket_history
+		WHERE ticket_id = $1 AND action = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var newValue string
+	err := r.db.conn.QueryRowContext(ctx, query, ticketID, string(domain.ActionAssigned)).Scan(&newValue)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get ticket assignee: %w", err)
+	}
+
+	var operatorID int64
+	if _, scanErr := fmt.Sscanf(newValue, "operator=%d", &operatorID); scanErr != nil {
+		return nil, nil
+	}
+
+	return &domain.User{ID: operatorID}, nil
 }
 
 // AddHistory добавляет запись в историю тикета

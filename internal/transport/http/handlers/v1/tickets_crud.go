@@ -1,4 +1,4 @@
-package handlers
+package v1
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 
 	"pet-ticket/internal/app/tickets"
 	domain "pet-ticket/internal/domain/tickets"
-	"pet-ticket/internal/transport/http/dto"
+	dto "pet-ticket/internal/transport/http/dto/v1"
 	mw "pet-ticket/internal/transport/http/middleware"
 
 	"github.com/gofiber/fiber/v2"

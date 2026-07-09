@@ -97,6 +97,8 @@ type Service interface {
 	DeleteTicket(ctx context.Context, id int64) error
 	ListTickets(ctx context.Context, input ListTicketsInput) ([]tickets.Ticket, error)
 	ListTicketsWithCursor(ctx context.Context, input ListTicketsWithCursorInput) (CursorPage, error)
+	GetTicketFull(ctx context.Context, id int64) (tickets.TicketFull, error)
+	ListTicketsFull(ctx context.Context, input ListTicketsInput) ([]tickets.TicketFull, error)
 	GetTicketHistory(ctx context.Context, ticketID int64, limit, offset int) ([]tickets.History, error)
 	GetAllStatuses(ctx context.Context) ([]StatusInfo, error)
 	GetAllTopics(ctx context.Context) ([]tickets.Topic, error)
@@ -407,6 +409,41 @@ func (s *service) ListTicketsWithCursor(ctx context.Context, input ListTicketsWi
 	}
 
 	return CursorPage{Items: items, NextCursor: nextCursor, HasMore: hasMore}, nil
+}
+
+// GetTicketFull возвращает тикет со всеми связями, раскрытыми во вложенные
+// объекты (v2 API).
+func (s *service) GetTicketFull(ctx context.Context, id int64) (tickets.TicketFull, error) {
+	full, err := s.repo.GetFullByID(ctx, id)
+	if err != nil {
+		s.logger.Error().Err(err).Int64("id", id).Msg("failed to get full ticket")
+		return tickets.TicketFull{}, fmt.Errorf("failed to get full ticket: %w", err)
+	}
+
+	return full, nil
+}
+
+// ListTicketsFull возвращает список тикетов с раскрытыми статусом/темой
+// (v2 API). Использует те же фильтры и offset-пагинацию, что и ListTickets.
+func (s *service) ListTicketsFull(ctx context.Context, input ListTicketsInput) ([]tickets.TicketFull, error) {
+	filter := ListFilter{
+		UserID:   input.UserID,
+		TopicID:  input.TopicID,
+		Status:   input.Status,
+		Priority: input.Priority,
+		Limit:    input.Limit,
+		Offset:   input.Offset,
+		SortBy:   input.SortBy,
+		SortDesc: input.SortDesc,
+	}
+
+	list, err := s.repo.ListFull(ctx, filter)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("failed to list full tickets")
+		return nil, fmt.Errorf("failed to list full tickets: %w", err)
+	}
+
+	return list, nil
 }
 
 // GetTicketHistory возвращает историю изменений тикета

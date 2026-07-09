@@ -35,6 +35,14 @@ var (
 		},
 	)
 
+	apiVersionRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "api_version_requests_total",
+			Help: "Total number of HTTP requests per API version (v1/v2)",
+		},
+		[]string{"version", "method", "path", "status"},
+	)
+
 	// Системные метрики
 	memoryUsage = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -101,6 +109,26 @@ func PrometheusMiddleware() fiber.Handler {
 
 		httpRequestsTotal.WithLabelValues(method, path, status).Inc()
 		httpRequestDuration.WithLabelValues(method, path).Observe(duration)
+
+		return err
+	}
+}
+
+// APIVersionMetricsMiddleware считает запросы в разрезе версии API (v1/v2)
+// — отдельно от общих http_requests_total, чтобы видеть скорость перехода
+// клиентов с v1 на v2 (например, для решения "когда можно выключать v1").
+func APIVersionMetricsMiddleware(version string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		err := c.Next()
+
+		status := strconv.Itoa(c.Response().StatusCode())
+		method := c.Method()
+		path := c.Route().Path
+		if path == "" {
+			path = c.Path()
+		}
+
+		apiVersionRequestsTotal.WithLabelValues(version, method, path, status).Inc()
 
 		return err
 	}
