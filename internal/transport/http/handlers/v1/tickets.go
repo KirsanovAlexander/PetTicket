@@ -1,4 +1,8 @@
-package handlers
+// Package v1 — обработчики v1 API. Перенесены без изменения поведения из
+// прежнего единого пакета handlers при введении версионирования (Task 9):
+// v1 продолжает работать как раньше, только помечен как deprecated
+// (см. middleware.DeprecationMiddleware в transport.go).
+package v1
 
 import (
 	"pet-ticket/internal/app/tickets"
@@ -18,7 +22,7 @@ type TicketsHandler struct {
 func NewTicketsHandler(service tickets.Service, logger zerolog.Logger) *TicketsHandler {
 	return &TicketsHandler{
 		service: service,
-		logger:  logger.With().Str("handler", "tickets").Logger(),
+		logger:  logger.With().Str("handler", "tickets_v1").Logger(),
 	}
 }
 

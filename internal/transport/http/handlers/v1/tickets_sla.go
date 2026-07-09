@@ -1,10 +1,10 @@
-package handlers
+package v1
 
 import (
 	"strconv"
 
 	"pet-ticket/internal/app/tickets"
-	"pet-ticket/internal/transport/http/dto"
+	dto "pet-ticket/internal/transport/http/dto/v1"
 	mw "pet-ticket/internal/transport/http/middleware"
 
 	"github.com/gofiber/fiber/v2"

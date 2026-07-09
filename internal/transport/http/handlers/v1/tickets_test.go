@@ -1,4 +1,4 @@
-package handlers
+package v1
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 
 	"pet-ticket/internal/app/tickets"
 	domain "pet-ticket/internal/domain/tickets"
-	"pet-ticket/internal/transport/http/dto"
+	dto "pet-ticket/internal/transport/http/dto/v1"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
@@ -19,21 +19,23 @@ import (
 
 // mockTicketsService — мок сервиса для тестов handlers
 type mockTicketsService struct {
-	createTicketFunc     func(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error)
-	getTicketFunc        func(ctx context.Context, id int64) (domain.Ticket, error)
-	updateTicketFunc     func(ctx context.Context, input tickets.UpdateTicketInput) (domain.Ticket, error)
-	deleteTicketFunc     func(ctx context.Context, id int64) error
-	listTicketsFunc      func(ctx context.Context, input tickets.ListTicketsInput) ([]domain.Ticket, error)
+	createTicketFunc          func(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error)
+	getTicketFunc             func(ctx context.Context, id int64) (domain.Ticket, error)
+	updateTicketFunc          func(ctx context.Context, input tickets.UpdateTicketInput) (domain.Ticket, error)
+	deleteTicketFunc          func(ctx context.Context, id int64) error
+	listTicketsFunc           func(ctx context.Context, input tickets.ListTicketsInput) ([]domain.Ticket, error)
 	listTicketsWithCursorFunc func(ctx context.Context, input tickets.ListTicketsWithCursorInput) (tickets.CursorPage, error)
-	getTicketHistoryFunc func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
-	getAllStatusesFunc   func(ctx context.Context) ([]tickets.StatusInfo, error)
-	getAllTopicsFunc     func(ctx context.Context) ([]domain.Topic, error)
-	updatePriorityFunc   func(ctx context.Context, ticketID int64, priority domain.Priority, userID int64) (domain.Ticket, error)
-	escalateTicketFunc   func(ctx context.Context, ticketID int64, userID int64) (domain.Ticket, error)
-	addCommentFunc       func(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error)
-	getSLAViolationsFunc func(ctx context.Context) ([]domain.Ticket, error)
-	closeTicketFunc      func(ctx context.Context, input tickets.CloseTicketInput) (domain.Ticket, error)
-	assignTicketFunc     func(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error)
+	getTicketFullFunc         func(ctx context.Context, id int64) (domain.TicketFull, error)
+	listTicketsFullFunc       func(ctx context.Context, input tickets.ListTicketsInput) ([]domain.TicketFull, error)
+	getTicketHistoryFunc      func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
+	getAllStatusesFunc        func(ctx context.Context) ([]tickets.StatusInfo, error)
+	getAllTopicsFunc          func(ctx context.Context) ([]domain.Topic, error)
+	updatePriorityFunc        func(ctx context.Context, ticketID int64, priority domain.Priority, userID int64) (domain.Ticket, error)
+	escalateTicketFunc        func(ctx context.Context, ticketID int64, userID int64) (domain.Ticket, error)
+	addCommentFunc            func(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error)
+	getSLAViolationsFunc      func(ctx context.Context) ([]domain.Ticket, error)
+	closeTicketFunc           func(ctx context.Context, input tickets.CloseTicketInput) (domain.Ticket, error)
+	assignTicketFunc          func(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error)
 }
 
 func (m *mockTicketsService) CreateTicket(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error) {
@@ -76,6 +78,20 @@ func (m *mockTicketsService) ListTicketsWithCursor(ctx context.Context, input ti
 		return m.listTicketsWithCursorFunc(ctx, input)
 	}
 	return tickets.CursorPage{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) GetTicketFull(ctx context.Context, id int64) (domain.TicketFull, error) {
+	if m.getTicketFullFunc != nil {
+		return m.getTicketFullFunc(ctx, id)
+	}
+	return domain.TicketFull{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) ListTicketsFull(ctx context.Context, input tickets.ListTicketsInput) ([]domain.TicketFull, error) {
+	if m.listTicketsFullFunc != nil {
+		return m.listTicketsFullFunc(ctx, input)
+	}
+	return nil, errors.New("not implemented")
 }
 
 func (m *mockTicketsService) GetTicketHistory(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error) {

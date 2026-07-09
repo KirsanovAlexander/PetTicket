@@ -31,20 +31,22 @@ func (m *mockEventBus) Publish(ctx context.Context, event domainEvents.Event) er
 //
 //nolint:dupl // Interface and mock have similar structure by design
 type mockRepository struct {
-	createFunc      func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error)
-	getByIDFunc     func(ctx context.Context, id int64) (domain.Ticket, error)
-	updateFunc      func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error)
-	deleteFunc      func(ctx context.Context, id int64) error
-	listFunc        func(ctx context.Context, filter ListFilter) ([]domain.Ticket, error)
-	listWithCursorFunc func(ctx context.Context, filter ListFilter) ([]domain.Ticket, bool, error)
-	addHistoryFunc  func(ctx context.Context, history domain.History) error
-	getHistoryFunc  func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
-	getStatusesFunc func(ctx context.Context) ([]StatusInfo, error)
-	getTopicsFunc         func(ctx context.Context) ([]domain.Topic, error)
-	getSLARuleFunc                  func(ctx context.Context, topicID, priorityID int64) (*domain.SLARule, error)
-	findSLAViolationsFunc           func(ctx context.Context) ([]domain.Ticket, error)
+	createFunc                       func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error)
+	getByIDFunc                      func(ctx context.Context, id int64) (domain.Ticket, error)
+	updateFunc                       func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error)
+	deleteFunc                       func(ctx context.Context, id int64) error
+	listFunc                         func(ctx context.Context, filter ListFilter) ([]domain.Ticket, error)
+	listWithCursorFunc               func(ctx context.Context, filter ListFilter) ([]domain.Ticket, bool, error)
+	getFullByIDFunc                  func(ctx context.Context, id int64) (domain.TicketFull, error)
+	listFullFunc                     func(ctx context.Context, filter ListFilter) ([]domain.TicketFull, error)
+	addHistoryFunc                   func(ctx context.Context, history domain.History) error
+	getHistoryFunc                   func(ctx context.Context, ticketID int64, limit, offset int) ([]domain.History, error)
+	getStatusesFunc                  func(ctx context.Context) ([]StatusInfo, error)
+	getTopicsFunc                    func(ctx context.Context) ([]domain.Topic, error)
+	getSLARuleFunc                   func(ctx context.Context, topicID, priorityID int64) (*domain.SLARule, error)
+	findSLAViolationsFunc            func(ctx context.Context) ([]domain.Ticket, error)
 	findResolvedTicketsOlderThanFunc func(ctx context.Context, inactiveDays int, limit int) ([]domain.Ticket, error)
-	updateLastUserActivityFunc      func(ctx context.Context, ticketID int64) error
+	updateLastUserActivityFunc       func(ctx context.Context, ticketID int64) error
 }
 
 func (m *mockRepository) Create(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
@@ -87,6 +89,20 @@ func (m *mockRepository) ListWithCursor(ctx context.Context, filter ListFilter) 
 		return m.listWithCursorFunc(ctx, filter)
 	}
 	return nil, false, errors.New("not implemented")
+}
+
+func (m *mockRepository) GetFullByID(ctx context.Context, id int64) (domain.TicketFull, error) {
+	if m.getFullByIDFunc != nil {
+		return m.getFullByIDFunc(ctx, id)
+	}
+	return domain.TicketFull{}, errors.New("not implemented")
+}
+
+func (m *mockRepository) ListFull(ctx context.Context, filter ListFilter) ([]domain.TicketFull, error) {
+	if m.listFullFunc != nil {
+		return m.listFullFunc(ctx, filter)
+	}
+	return nil, errors.New("not implemented")
 }
 
 func (m *mockRepository) AddHistory(ctx context.Context, history domain.History) error {

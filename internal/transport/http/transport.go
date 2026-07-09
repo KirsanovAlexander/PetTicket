@@ -1,8 +1,11 @@
 package http
 
 import (
+	"time"
+
 	"pet-ticket/internal/app/tickets"
-	"pet-ticket/internal/transport/http/handlers"
+	v1 "pet-ticket/internal/transport/http/handlers/v1"
+	v2 "pet-ticket/internal/transport/http/handlers/v2"
 	mw "pet-ticket/internal/transport/http/middleware"
 
 	"github.com/gofiber/adaptor/v2"
@@ -14,20 +17,28 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// v1Lifetime — сколько живёт v1 после старта сервиса, прежде чем в
+// Sunset-заголовке проставляется дата отключения. Отсчитывается от момента
+// запуска процесса (не хранится нигде между рестартами) — этого достаточно,
+// чтобы дать клиентам предсказуемое окно на переход на v2.
+const v1Lifetime = 180 * 24 * time.Hour
+
 // Transport представляет HTTP транспортный слой
 type Transport struct {
-	app            *fiber.App
-	ticketsHandler *handlers.TicketsHandler
-	logger         zerolog.Logger
-	env            string
+	app       *fiber.App
+	v1Handler *v1.TicketsHandler
+	v2Handler *v2.TicketsHandler
+	logger    zerolog.Logger
+	env       string
 }
 
 // New создаёт новый экземпляр HTTP транспорта
 func New(svc tickets.Service, logger zerolog.Logger, env string) *Transport {
 	t := &Transport{
-		ticketsHandler: handlers.NewTicketsHandler(svc, logger),
-		logger:         logger.With().Str("module", "transport").Logger(),
-		env:            env,
+		v1Handler: v1.NewTicketsHandler(svc, logger),
+		v2Handler: v2.NewTicketsHandler(svc, logger),
+		logger:    logger.With().Str("module", "transport").Logger(),
+		env:       env,
 	}
 
 	app := fiber.New(fiber.Config{
@@ -63,11 +74,20 @@ func (t *Transport) setupRoutes() {
 		t.app.Use(pprof.New())
 	}
 
-	// API routes
-	api := t.app.Group("/api/v1")
+	// v1 — deprecated, но продолжает полностью работать. Deprecation/Sunset/
+	// Link проставляются на все ответы группы, а метрики версии считаются
+	// отдельно от v2 (APIVersionMetricsMiddleware) — чтобы видеть скорость
+	// перехода клиентов и когда v1 реально можно выключать.
+	apiV1 := t.app.Group("/api/v1")
+	apiV1.Use(mw.APIVersionMetricsMiddleware("v1"))
+	apiV1.Use(mw.DeprecationMiddleware(time.Now().Add(v1Lifetime), "/api/v2"))
+	t.v1Handler.RegisterRoutes(apiV1)
 
-	// Регистрируем роуты через handler
-	t.ticketsHandler.RegisterRoutes(api)
+	// v2 — тикеты с вложенными объектами (user/status/topic/comments/sla)
+	// вместо плоских *_id полей v1.
+	apiV2 := t.app.Group("/api/v2")
+	apiV2.Use(mw.APIVersionMetricsMiddleware("v2"))
+	t.v2Handler.RegisterRoutes(apiV2)
 }
 
 // App возвращает экземпляр Fiber приложения

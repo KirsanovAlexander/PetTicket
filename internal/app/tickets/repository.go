@@ -31,6 +31,16 @@ type Repository interface {
 	// и лишняя запись отбрасывается.
 	ListWithCursor(ctx context.Context, filter ListFilter) (items []tickets.Ticket, hasMore bool, err error)
 
+	// GetFullByID возвращает тикет со всеми связями, раскрытыми во
+	// вложенные объекты (для v2 API): статус с DisplayName, тема,
+	// комментарии (из ticket_history) и, если назначен, assignee.
+	GetFullByID(ctx context.Context, id int64) (tickets.TicketFull, error)
+
+	// ListFull возвращает список тикетов с раскрытыми статусом/темой (для
+	// v2 API). В отличие от GetFullByID НЕ подгружает Comments/Assignee —
+	// это отдельные запросы на тикет, недопустимые в списке (N+1).
+	ListFull(ctx context.Context, filter ListFilter) ([]tickets.TicketFull, error)
+
 	// AddHistory добавляет запись в историю тикета
 	AddHistory(ctx context.Context, history tickets.History) error
 
