@@ -230,7 +230,7 @@ func TestCloseTicket_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
 
 	updated, err := svc.CloseTicket(context.Background(), CloseTicketInput{
 		TicketID: 1,
@@ -263,7 +263,7 @@ func TestCloseTicket_NotResolved(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
 
 	_, err := svc.CloseTicket(context.Background(), CloseTicketInput{TicketID: 1, UserID: 0})
 	if err == nil {

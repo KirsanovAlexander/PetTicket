@@ -40,6 +40,16 @@ type Config struct {
 	AutoCloseBatchSize         int    `envconfig:"AUTO_CLOSE_BATCH_SIZE" default:"100"`
 	AutoCloseProcessingTimeout int    `envconfig:"AUTO_CLOSE_PROCESSING_TIMEOUT" default:"300"`
 
+	// Notification outbox worker (см. cmd/notification-worker)
+	NotificationWebhookURL                     string `envconfig:"NOTIFICATION_WEBHOOK_URL" default:"http://localhost:9999/webhook"`
+	NotificationHTTPTimeout                    int    `envconfig:"NOTIFICATION_HTTP_TIMEOUT" default:"10"` // секунды
+	NotificationPollInterval                   int    `envconfig:"NOTIFICATION_POLL_INTERVAL" default:"5"` // секунды
+	NotificationBatchSize                      int    `envconfig:"NOTIFICATION_BATCH_SIZE" default:"20"`
+	NotificationBaseBackoffSeconds             int    `envconfig:"NOTIFICATION_BASE_BACKOFF_SECONDS" default:"30"` // база exponential backoff
+	NotificationCircuitBreakerFailureThreshold int    `envconfig:"NOTIFICATION_CB_FAILURE_THRESHOLD" default:"5"`
+	NotificationCircuitBreakerSuccessThreshold int    `envconfig:"NOTIFICATION_CB_SUCCESS_THRESHOLD" default:"2"`
+	NotificationCircuitBreakerTimeout          int    `envconfig:"NOTIFICATION_CB_TIMEOUT" default:"30"` // секунды, Open -> HalfOpen
+
 	ENV string `envconfig:"ENV" default:"local"`
 }
 

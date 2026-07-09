@@ -6,6 +6,7 @@ import (
 	"time"
 
 	domainEvents "pet-ticket/internal/domain/events"
+	"pet-ticket/internal/domain/notifications"
 	"pet-ticket/internal/domain/tickets"
 	infraEvents "pet-ticket/internal/infra/events"
 
@@ -16,8 +17,14 @@ import (
 type contextKey string
 
 const (
-	// txContextKey - ключ для хранения транзакции в контексте
-	txContextKey contextKey = "tx"
+	// TxContextKey - ключ для хранения транзакции в контексте. Экспортирован
+	// (не просто txContextKey), потому что infra/postgres читает его же
+	// значение из ctx.Value в getExecutor — если бы каждый пакет объявлял
+	// свой собственный приватный contextKey с тем же именем "tx", это были
+	// бы РАЗНЫЕ типы в терминах Go, ctx.Value() никогда бы не находил
+	// сохранённую транзакцию, и все "транзакционные" операции сервиса
+	// молча выполнялись бы через пул соединений в обход tx.
+	TxContextKey contextKey = "tx"
 )
 
 // CreateTicketInput представляет входные данные для создания тикета
@@ -112,11 +119,12 @@ type Service interface {
 
 // service реализует интерфейс Service
 type service struct {
-	repo     Repository
-	db       TxBeginner
-	logger   zerolog.Logger
-	slaCalc  *SLACalculator
-	eventBus infraEvents.Bus
+	repo       Repository
+	db         TxBeginner
+	logger     zerolog.Logger
+	slaCalc    *SLACalculator
+	eventBus   infraEvents.Bus
+	outboxRepo notifications.OutboxRepository
 }
 
 // TxBeginner интерфейс для создания транзакций
@@ -130,16 +138,21 @@ type TxCommitter interface {
 	Rollback() error
 }
 
-// NewService создаёт новый экземпляр сервиса. eventBus может быть nil —
-// сервис остаётся полностью рабочим, просто не публикует события (удобно
-// для юнит-тестов, которым публикация событий не важна).
-func NewService(repo Repository, db TxBeginner, logger zerolog.Logger, eventBus infraEvents.Bus) Service {
+// NewService создаёт новый экземпляр сервиса. eventBus и outboxRepo могут
+// быть nil — сервис остаётся полностью рабочим, просто не публикует события
+// и/или не создаёт outbox-записи (удобно для юнит-тестов и для флоу вроде
+// auto-closer, которым уведомления не нужны).
+func NewService(
+	repo Repository, db TxBeginner, logger zerolog.Logger,
+	eventBus infraEvents.Bus, outboxRepo notifications.OutboxRepository,
+) Service {
 	return &service{
-		repo:     repo,
-		db:       db,
-		logger:   logger,
-		slaCalc:  NewSLACalculator(repo),
-		eventBus: eventBus,
+		repo:       repo,
+		db:         db,
+		logger:     logger,
+		slaCalc:    NewSLACalculator(repo),
+		eventBus:   eventBus,
+		outboxRepo: outboxRepo,
 	}
 }
 
@@ -192,7 +205,7 @@ func (s *service) CreateTicket(ctx context.Context, input CreateTicketInput) (ti
 	}()
 
 	// Контекст с транзакцией
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
 
 	// Сохранение в репозиторий
 	created, err := s.repo.Create(txCtx, ticket)
@@ -245,6 +258,7 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 
 	oldStatus := existing.Status
 	oldComment := existing.Comment
+	statusChanged := input.Status != nil && oldStatus != *input.Status
 
 	// Обновляем поля
 	if input.Status != nil {
@@ -286,13 +300,34 @@ func (s *service) UpdateTicket(ctx context.Context, input UpdateTicketInput) (ti
 	}()
 
 	// Контекст с транзакцией
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
 
 	// Сохранение
 	updated, err := s.repo.Update(txCtx, existing)
 	if err != nil {
 		s.logger.Error().Err(err).Int64("id", input.ID).Msg("failed to update ticket")
 		return tickets.Ticket{}, fmt.Errorf("failed to update ticket: %w", err)
+	}
+
+	// Outbox-запись создаётся ВНУТРИ той же транзакции (тем же txCtx), что и
+	// обновление тикета — transactional outbox: если тикет не закоммитился,
+	// уведомление тоже не должно уйти в очередь на отправку, и наоборот.
+	if statusChanged && s.outboxRepo != nil {
+		outboxEntry := notifications.OutboxEntry{
+			UserID:      updated.UserID,
+			TicketID:    updated.ID,
+			Type:        notifications.NotifStatusChanged,
+			MaxAttempts: 5,
+			NextRetryAt: time.Now(),
+			Payload: map[string]interface{}{
+				"title":   "Статус тикета изменен",
+				"message": fmt.Sprintf("Ваш тикет #%d: %s -> %s", updated.ID, oldStatus, updated.Status),
+			},
+		}
+		if err = s.outboxRepo.Create(txCtx, outboxEntry); err != nil {
+			s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to create outbox entry")
+			return tickets.Ticket{}, fmt.Errorf("failed to create outbox entry: %w", err)
+		}
 	}
 
 	// Коммит транзакции. История статуса/резолва/комментария больше не
@@ -542,7 +577,7 @@ func (s *service) changePriority(
 		}
 	}()
 
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
 
 	updated, err := s.repo.Update(txCtx, existing)
 	if err != nil {
@@ -603,7 +638,7 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 		}
 	}()
 
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
 
 	if !input.IsSupportComment {
 		if err := s.repo.UpdateLastUserActivity(txCtx, existing.ID); err != nil {
@@ -682,7 +717,7 @@ func (s *service) CloseTicket(ctx context.Context, input CloseTicketInput) (tick
 			}
 		}
 	}()
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
 
 	oldStatus := ticket.Status
 	ticket.Status = tickets.StatusClosed

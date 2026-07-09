@@ -90,6 +90,7 @@ func applyMigrations(db *sql.DB) error {
 	files := []string{
 		"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql",
 		"004_add_last_activity.up.sql", "005_add_performance_indexes.up.sql",
+		"006_add_notification_outbox.up.sql",
 	}
 
 	for _, name := range files {
@@ -578,7 +579,7 @@ func TestTicketsRepository_Transaction_Integration(t *testing.T) {
 	}
 
 	// Сохраняем транзакцию в контекст
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, apptickets.TxContextKey, tx)
 
 	repo := NewTicketsRepository(testDB.db)
 
@@ -640,7 +641,7 @@ func TestTicketsRepository_TransactionRollback_Integration(t *testing.T) {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
 
-	txCtx := context.WithValue(ctx, txContextKey, tx)
+	txCtx := context.WithValue(ctx, apptickets.TxContextKey, tx)
 
 	repo := NewTicketsRepository(testDB.db)
 
