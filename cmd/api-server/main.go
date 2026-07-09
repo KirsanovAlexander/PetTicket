@@ -109,8 +109,13 @@ func run() error {
 	eventBus.Subscribe(domainEvents.EventTicketCommentAdded, historyHandler.HandleTicketCommentAdded)
 	eventBus.Subscribe(domainEvents.EventTicketAssigned, historyHandler.HandleTicketAssigned)
 
+	// Outbox-репозиторий: сервис пишет туда уведомления при смене статуса
+	// тикета (в той же транзакции), отдельный notification-worker их читает
+	// и отправляет — см. cmd/notification-worker.
+	outboxRepo := postgres.NewOutboxRepository(db)
+
 	// Service (use cases)
-	ticketsService := tickets.NewService(ticketsRepo, db, appLogger, eventBus)
+	ticketsService := tickets.NewService(ticketsRepo, db, appLogger, eventBus, outboxRepo)
 
 	// Transport (HTTP)
 	transport := httpTransport.New(ticketsService, appLogger, cfg.ENV)

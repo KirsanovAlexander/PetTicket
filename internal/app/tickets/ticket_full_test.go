@@ -26,7 +26,7 @@ func TestGetTicketFull_Success(t *testing.T) {
 			return domain.TicketFull{}, ErrNotFound
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
 
 	full, err := svc.GetTicketFull(context.Background(), 1)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestGetTicketFull_NotFound(t *testing.T) {
 			return domain.TicketFull{}, ErrNotFound
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
 
 	_, err := svc.GetTicketFull(context.Background(), 999)
 	if !errors.Is(err, ErrNotFound) {
@@ -68,7 +68,7 @@ func TestListTicketsFull_Success(t *testing.T) {
 			return expected, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
 
 	list, err := svc.ListTicketsFull(context.Background(), ListTicketsInput{
 		UserID: &userID, Limit: 10, Offset: 0,
@@ -93,7 +93,7 @@ func TestListTicketsFull_RepoError(t *testing.T) {
 			return nil, errors.New("db error")
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil)
+	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
 
 	_, err := svc.ListTicketsFull(context.Background(), ListTicketsInput{})
 	if err == nil {

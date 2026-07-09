@@ -60,6 +60,40 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  mock-server:
+    image: kennethreitz/httpbin
+    container_name: pet-ticket-mock-server
+    ports:
+      - "9999:80"
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.notification-worker
+    container_name: pet-ticket-notification-worker
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: pet_ticket
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      NOTIFICATION_WEBHOOK_URL: "http://mock-server/post"
+      NOTIFICATION_HTTP_TIMEOUT: "10"
+      NOTIFICATION_POLL_INTERVAL: "5"
+      NOTIFICATION_BATCH_SIZE: "20"
+      NOTIFICATION_BASE_BACKOFF_SECONDS: "30"
+      NOTIFICATION_CB_FAILURE_THRESHOLD: "5"
+      NOTIFICATION_CB_SUCCESS_THRESHOLD: "2"
+      NOTIFICATION_CB_TIMEOUT: "30"
+      LOGGER_FORMAT: console
+      ENV: local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-server:
+        condition: service_started
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.48.1
     container_name: pet-ticket-prometheus

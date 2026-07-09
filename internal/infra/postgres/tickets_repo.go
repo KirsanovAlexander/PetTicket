@@ -12,14 +12,6 @@ import (
 	domain "pet-ticket/internal/domain/tickets"
 )
 
-// contextKey - приватный тип для ключей контекста
-type contextKey string
-
-const (
-	// txContextKey - ключ для хранения транзакции в контексте
-	txContextKey contextKey = "tx"
-)
-
 // TicketsRepository реализует интерфейс tickets.Repository
 type TicketsRepository struct {
 	db *DB
@@ -37,9 +29,11 @@ func NewTicketsRepository(db *DB) *TicketsRepository {
 	return &TicketsRepository{db: db}
 }
 
-// getExecutor возвращает executor (либо транзакцию из контекста, либо базовое соединение)
+// getExecutor возвращает executor (либо транзакцию из контекста, либо базовое соединение).
+// Ключ — tickets.TxContextKey (см. её комментарий в app/tickets/service.go
+// про то, почему это НЕ отдельный локальный contextKey этого пакета).
 func (r *TicketsRepository) getExecutor(ctx context.Context) Executor {
-	if tx, ok := ctx.Value(txContextKey).(*TxAdapter); ok && tx != nil {
+	if tx, ok := ctx.Value(tickets.TxContextKey).(*TxAdapter); ok && tx != nil {
 		return tx.tx
 	}
 	return r.db.conn
