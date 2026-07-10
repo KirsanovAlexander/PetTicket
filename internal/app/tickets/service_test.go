@@ -216,7 +216,7 @@ func TestGetTicket_Success(t *testing.T) {
 
 	db := &mockDB{}
 	logger := testLogger()
-	svc := NewService(repo, db, logger, nil, nil)
+	svc := NewService(repo, nil, db, logger, nil, nil, false)
 
 	// Act
 	ticket, err := svc.GetTicket(context.Background(), 1)
@@ -244,7 +244,7 @@ func TestGetTicket_NotFound(t *testing.T) {
 
 	db := &mockDB{}
 	logger := testLogger()
-	svc := NewService(repo, db, logger, nil, nil)
+	svc := NewService(repo, nil, db, logger, nil, nil, false)
 
 	// Act
 	_, err := svc.GetTicket(context.Background(), 999)
@@ -283,7 +283,7 @@ func TestCreateTicket_Success(t *testing.T) {
 	}
 
 	logger := testLogger()
-	svc := NewService(repo, db, logger, nil, nil)
+	svc := NewService(repo, nil, db, logger, nil, nil, false)
 
 	input := CreateTicketInput{
 		UserID:  100,
@@ -322,7 +322,7 @@ func TestCreateTicket_PublishesEvent(t *testing.T) {
 		},
 	}
 	bus := &mockEventBus{}
-	svc := NewService(repo, &mockDB{}, testLogger(), bus, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
 	_, err := svc.CreateTicket(context.Background(), CreateTicketInput{
 		UserID:  100,
@@ -361,7 +361,7 @@ func TestCreateTicket_NoEventBus_DoesNotPanic(t *testing.T) {
 			return ticket, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	if _, err := svc.CreateTicket(context.Background(), CreateTicketInput{UserID: 1, TopicID: 1, Comment: "x"}); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -374,7 +374,7 @@ func TestCreateTicket_InvalidInput(t *testing.T) {
 	repo := &mockRepository{}
 	db := &mockDB{}
 	logger := testLogger()
-	svc := NewService(repo, db, logger, nil, nil)
+	svc := NewService(repo, nil, db, logger, nil, nil, false)
 
 	tests := []struct {
 		name  string
@@ -448,7 +448,7 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 	}
 
 	logger := testLogger()
-	svc := NewService(repo, db, logger, nil, nil)
+	svc := NewService(repo, nil, db, logger, nil, nil, false)
 
 	newStatus := domain.StatusInProgress
 	input := UpdateTicketInput{
@@ -487,7 +487,7 @@ func TestUpdateTicket_PublishesStatusChangedEvent(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	bus := &mockEventBus{}
-	svc := NewService(repo, &mockDB{}, testLogger(), bus, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
 	newStatus := domain.StatusInProgress
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {
@@ -530,7 +530,7 @@ func TestUpdateTicket_PublishesStatusChangedEvent_ResolvedFlag(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	bus := &mockEventBus{}
-	svc := NewService(repo, &mockDB{}, testLogger(), bus, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
 	newStatus := domain.StatusClosed
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {
@@ -562,7 +562,7 @@ func TestUpdateTicket_PublishesCommentAddedEvent(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	bus := &mockEventBus{}
-	svc := NewService(repo, &mockDB{}, testLogger(), bus, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
 	newComment := "new comment"
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Comment: &newComment}); err != nil {
@@ -594,7 +594,7 @@ func TestUpdateTicket_NoEventsWhenNothingChanges(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	bus := &mockEventBus{}
-	svc := NewService(repo, &mockDB{}, testLogger(), bus, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1}); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -644,7 +644,7 @@ func TestUpdateTicket_TransactionRollback(t *testing.T) {
 	}
 
 	logger := testLogger()
-	svc := NewService(repo, db, logger, nil, nil)
+	svc := NewService(repo, nil, db, logger, nil, nil, false)
 
 	newStatus := domain.StatusInProgress
 	input := UpdateTicketInput{
@@ -676,7 +676,7 @@ func TestCreateTicket_WithPriority(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 	priority := domain.PriorityHigh
 
 	_, err := svc.CreateTicket(context.Background(), CreateTicketInput{
@@ -718,7 +718,7 @@ func TestUpdatePriority_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	updated, err := svc.UpdatePriority(context.Background(), 1, domain.PriorityHigh, 100)
 	if err != nil {
@@ -760,7 +760,7 @@ func TestEscalateTicket_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	updated, err := svc.EscalateTicket(context.Background(), 1, 100)
 	if err != nil {
@@ -796,7 +796,7 @@ func TestEscalateTicket_MaxPriority(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	updated, err := svc.EscalateTicket(context.Background(), 1, 100)
 	if err != nil {
@@ -827,7 +827,7 @@ func TestAssignTicket_Success(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	bus := &mockEventBus{}
-	svc := NewService(repo, &mockDB{}, testLogger(), bus, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
 	updated, err := svc.AssignTicket(context.Background(), AssignTicketInput{
 		TicketID:   1,
@@ -877,7 +877,7 @@ func TestAssignTicket_CustomComment(t *testing.T) {
 			return ticket, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.AssignTicket(context.Background(), AssignTicketInput{
 		TicketID:   1,
@@ -906,7 +906,7 @@ func TestAssignTicket_AlreadyAssigned_ReturnsConflict(t *testing.T) {
 			return ticket, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.AssignTicket(context.Background(), AssignTicketInput{TicketID: 1, OperatorID: 55, AssignedBy: 100})
 	if !errors.Is(err, ErrConflict) {

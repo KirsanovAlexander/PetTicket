@@ -68,8 +68,24 @@ func (m *mockService) EscalateTicket(ctx context.Context, ticketID int64, userID
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
-func (m *mockService) AddComment(ctx context.Context, input AddCommentInput) (domain.Ticket, error) {
+func (m *mockService) AddComment(ctx context.Context, input domain.AddCommentInput) (domain.Ticket, error) {
 	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockService) GetComments(ctx context.Context, filter domain.ListCommentsFilter) ([]domain.TicketComment, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockService) GetLastComment(ctx context.Context, ticketID int64) (*domain.TicketComment, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockService) UpdateComment(ctx context.Context, input domain.UpdateCommentInput) error {
+	return errors.New("not implemented")
+}
+
+func (m *mockService) DeleteComment(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
 }
 
 func (m *mockService) GetSLAViolations(ctx context.Context) ([]domain.Ticket, error) {
@@ -230,7 +246,7 @@ func TestCloseTicket_Success(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	updated, err := svc.CloseTicket(context.Background(), CloseTicketInput{
 		TicketID: 1,
@@ -263,7 +279,7 @@ func TestCloseTicket_NotResolved(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.CloseTicket(context.Background(), CloseTicketInput{TicketID: 1, UserID: 0})
 	if err == nil {

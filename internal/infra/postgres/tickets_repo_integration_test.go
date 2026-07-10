@@ -90,7 +90,8 @@ func applyMigrations(db *sql.DB) error {
 	files := []string{
 		"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql",
 		"004_add_last_activity.up.sql", "005_add_performance_indexes.up.sql",
-		"006_add_notification_outbox.up.sql",
+		"006_add_notification_outbox.up.sql", "007_add_comments_table.up.sql",
+		"008_migrate_existing_comments.up.sql",
 	}
 
 	for _, name := range files {

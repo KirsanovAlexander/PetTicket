@@ -47,7 +47,7 @@ func TestUpdateTicket_CreatesOutboxEntryOnStatusChange(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	outbox := &mockOutboxRepository{}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, outbox)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, outbox, false)
 
 	newStatus := domain.StatusInProgress
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {
@@ -85,7 +85,7 @@ func TestUpdateTicket_NoOutboxEntryWhenStatusUnchanged(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	outbox := &mockOutboxRepository{}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, outbox)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, outbox, false)
 
 	newComment := "Updated comment only, no status change"
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Comment: &newComment}); err != nil {
@@ -106,7 +106,7 @@ func TestUpdateTicket_NilOutboxRepo_DoesNotPanic(t *testing.T) {
 		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	newStatus := domain.StatusInProgress
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {
@@ -139,7 +139,7 @@ func TestUpdateTicket_OutboxCreateFailure_RollsBackTransaction(t *testing.T) {
 			return errors.New("db unavailable")
 		},
 	}
-	svc := NewService(repo, db, testLogger(), nil, outbox)
+	svc := NewService(repo, nil, db, testLogger(), nil, outbox, false)
 
 	newStatus := domain.StatusInProgress
 	_, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus})
@@ -166,7 +166,7 @@ func TestUpdateTicket_OutboxEntryUsesTxContext(t *testing.T) {
 		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
 	}
 	outbox := &mockOutboxRepository{}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, outbox)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, outbox, false)
 
 	newStatus := domain.StatusInProgress
 	if _, err := svc.UpdateTicket(context.Background(), UpdateTicketInput{ID: 1, Status: &newStatus}); err != nil {

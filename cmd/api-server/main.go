@@ -114,8 +114,15 @@ func run() error {
 	// и отправляет — см. cmd/notification-worker.
 	outboxRepo := postgres.NewOutboxRepository(db)
 
+	// Комментарии: dual write в ticket_comments и legacy tickets.comment,
+	// откуда читать — решает FEATURE_NEW_COMMENTS (см. Task 11).
+	commentsRepo := postgres.NewCommentsRepository(db)
+
 	// Service (use cases)
-	ticketsService := tickets.NewService(ticketsRepo, db, appLogger, eventBus, outboxRepo)
+	ticketsService := tickets.NewService(
+		ticketsRepo, commentsRepo, db, appLogger,
+		eventBus, outboxRepo, cfg.UseNewComments,
+	)
 
 	// Transport (HTTP)
 	transport := httpTransport.New(ticketsService, appLogger, cfg.ENV)

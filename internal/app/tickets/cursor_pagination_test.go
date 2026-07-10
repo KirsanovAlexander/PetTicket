@@ -20,7 +20,7 @@ func TestListTicketsWithCursor_Success(t *testing.T) {
 			return []domain.Ticket{item1, item2}, true, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	page, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{})
 	if err != nil {
@@ -62,7 +62,7 @@ func TestListTicketsWithCursor_NoMore_EmptyNextCursor(t *testing.T) {
 			return []domain.Ticket{{ID: 1, CreatedAt: time.Now()}}, false, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	page, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{})
 	if err != nil {
@@ -84,7 +84,7 @@ func TestListTicketsWithCursor_PageSizeClampedToMax(t *testing.T) {
 			return nil, false, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{PageSize: 9999})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestListTicketsWithCursor_InvalidDirectionDefaultsToNext(t *testing.T) {
 			return nil, false, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{Direction: "sideways"})
 	if err != nil {
@@ -125,7 +125,7 @@ func TestListTicketsWithCursor_PrevDirection_NextCursorFromFirstItem(t *testing.
 			return []domain.Ticket{newest, oldest}, true, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	page, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{Direction: "prev"})
 	if err != nil {
@@ -147,7 +147,7 @@ func TestListTicketsWithCursor_RepoError(t *testing.T) {
 			return nil, false, errors.New("db error")
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{})
 	if err == nil {
@@ -161,7 +161,7 @@ func TestListTicketsWithCursor_InvalidCursorPropagatesErrInvalidCursor(t *testin
 			return nil, false, ErrInvalidCursor
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{})
 	if !errors.Is(err, ErrInvalidCursor) {
@@ -183,7 +183,7 @@ func TestListTicketsWithCursor_FiltersPassedThrough(t *testing.T) {
 			return nil, false, nil
 		},
 	}
-	svc := NewService(repo, &mockDB{}, testLogger(), nil, nil)
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
 	_, err := svc.ListTicketsWithCursor(context.Background(), ListTicketsWithCursorInput{
 		UserID:   &userID,
