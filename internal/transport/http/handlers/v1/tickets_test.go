@@ -32,7 +32,11 @@ type mockTicketsService struct {
 	getAllTopicsFunc          func(ctx context.Context) ([]domain.Topic, error)
 	updatePriorityFunc        func(ctx context.Context, ticketID int64, priority domain.Priority, userID int64) (domain.Ticket, error)
 	escalateTicketFunc        func(ctx context.Context, ticketID int64, userID int64) (domain.Ticket, error)
-	addCommentFunc            func(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error)
+	addCommentFunc            func(ctx context.Context, input domain.AddCommentInput) (domain.Ticket, error)
+	getCommentsFunc           func(ctx context.Context, filter domain.ListCommentsFilter) ([]domain.TicketComment, error)
+	getLastCommentFunc        func(ctx context.Context, ticketID int64) (*domain.TicketComment, error)
+	updateCommentFunc         func(ctx context.Context, input domain.UpdateCommentInput) error
+	deleteCommentFunc         func(ctx context.Context, id int64) error
 	getSLAViolationsFunc      func(ctx context.Context) ([]domain.Ticket, error)
 	closeTicketFunc           func(ctx context.Context, input tickets.CloseTicketInput) (domain.Ticket, error)
 	assignTicketFunc          func(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error)
@@ -129,11 +133,39 @@ func (m *mockTicketsService) EscalateTicket(ctx context.Context, ticketID int64,
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
-func (m *mockTicketsService) AddComment(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error) {
+func (m *mockTicketsService) AddComment(ctx context.Context, input domain.AddCommentInput) (domain.Ticket, error) {
 	if m.addCommentFunc != nil {
 		return m.addCommentFunc(ctx, input)
 	}
 	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) GetComments(ctx context.Context, filter domain.ListCommentsFilter) ([]domain.TicketComment, error) {
+	if m.getCommentsFunc != nil {
+		return m.getCommentsFunc(ctx, filter)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) GetLastComment(ctx context.Context, ticketID int64) (*domain.TicketComment, error) {
+	if m.getLastCommentFunc != nil {
+		return m.getLastCommentFunc(ctx, ticketID)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) UpdateComment(ctx context.Context, input domain.UpdateCommentInput) error {
+	if m.updateCommentFunc != nil {
+		return m.updateCommentFunc(ctx, input)
+	}
+	return errors.New("not implemented")
+}
+
+func (m *mockTicketsService) DeleteComment(ctx context.Context, id int64) error {
+	if m.deleteCommentFunc != nil {
+		return m.deleteCommentFunc(ctx, id)
+	}
+	return errors.New("not implemented")
 }
 
 func (m *mockTicketsService) GetSLAViolations(ctx context.Context) ([]domain.Ticket, error) {

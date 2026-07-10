@@ -50,6 +50,13 @@ type Config struct {
 	NotificationCircuitBreakerSuccessThreshold int    `envconfig:"NOTIFICATION_CB_SUCCESS_THRESHOLD" default:"2"`
 	NotificationCircuitBreakerTimeout          int    `envconfig:"NOTIFICATION_CB_TIMEOUT" default:"30"` // секунды, Open -> HalfOpen
 
+	// UseNewComments — feature flag миграции комментариев на отдельную
+	// таблицу ticket_comments (см. Task 11). false = читать из legacy-поля
+	// tickets.comment; true = читать из ticket_comments. Запись всегда идёт
+	// в оба места (dual write), независимо от флага — иначе откат флага
+	// назад потерял бы свежие данные.
+	UseNewComments bool `envconfig:"FEATURE_NEW_COMMENTS" default:"false"`
+
 	ENV string `envconfig:"ENV" default:"local"`
 }
 

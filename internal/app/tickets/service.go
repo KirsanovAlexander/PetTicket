@@ -73,14 +73,6 @@ type CursorPage struct {
 	HasMore    bool
 }
 
-// AddCommentInput входные данные для добавления комментария
-type AddCommentInput struct {
-	TicketID         int64
-	UserID           int64
-	Comment          string
-	IsSupportComment bool
-}
-
 // CloseTicketInput входные данные для закрытия тикета
 type CloseTicketInput struct {
 	TicketID int64
@@ -111,7 +103,11 @@ type Service interface {
 	GetAllTopics(ctx context.Context) ([]tickets.Topic, error)
 	UpdatePriority(ctx context.Context, ticketID int64, priority tickets.Priority, userID int64) (tickets.Ticket, error)
 	EscalateTicket(ctx context.Context, ticketID int64, userID int64) (tickets.Ticket, error)
-	AddComment(ctx context.Context, input AddCommentInput) (tickets.Ticket, error)
+	AddComment(ctx context.Context, input tickets.AddCommentInput) (tickets.Ticket, error)
+	GetComments(ctx context.Context, filter tickets.ListCommentsFilter) ([]tickets.TicketComment, error)
+	GetLastComment(ctx context.Context, ticketID int64) (*tickets.TicketComment, error)
+	UpdateComment(ctx context.Context, input tickets.UpdateCommentInput) error
+	DeleteComment(ctx context.Context, id int64) error
 	GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
 	CloseTicket(ctx context.Context, input CloseTicketInput) (tickets.Ticket, error)
 	AssignTicket(ctx context.Context, input AssignTicketInput) (tickets.Ticket, error)
@@ -119,12 +115,14 @@ type Service interface {
 
 // service реализует интерфейс Service
 type service struct {
-	repo       Repository
-	db         TxBeginner
-	logger     zerolog.Logger
-	slaCalc    *SLACalculator
-	eventBus   infraEvents.Bus
-	outboxRepo notifications.OutboxRepository
+	repo           Repository
+	commentsRepo   CommentsRepository
+	db             TxBeginner
+	logger         zerolog.Logger
+	slaCalc        *SLACalculator
+	eventBus       infraEvents.Bus
+	outboxRepo     notifications.OutboxRepository
+	useNewComments bool
 }
 
 // TxBeginner интерфейс для создания транзакций
@@ -142,17 +140,25 @@ type TxCommitter interface {
 // быть nil — сервис остаётся полностью рабочим, просто не публикует события
 // и/или не создаёт outbox-записи (удобно для юнит-тестов и для флоу вроде
 // auto-closer, которым уведомления не нужны).
+//
+// useNewComments — значение FEATURE_NEW_COMMENTS (см. config.Config).
+// Передаётся отдельным bool, а не *config.Config целиком: сервису не нужно
+// знать про весь конфиг приложения (Postgres-DSN, notification-настройки и
+// т.д.), а *config.Config живёт в infra-слое — принимать его сюда напрямую
+// значило бы тянуть infra-зависимость в app-слой без необходимости.
 func NewService(
-	repo Repository, db TxBeginner, logger zerolog.Logger,
-	eventBus infraEvents.Bus, outboxRepo notifications.OutboxRepository,
+	repo Repository, commentsRepo CommentsRepository, db TxBeginner, logger zerolog.Logger,
+	eventBus infraEvents.Bus, outboxRepo notifications.OutboxRepository, useNewComments bool,
 ) Service {
 	return &service{
-		repo:       repo,
-		db:         db,
-		logger:     logger,
-		slaCalc:    NewSLACalculator(repo),
-		eventBus:   eventBus,
-		outboxRepo: outboxRepo,
+		repo:           repo,
+		commentsRepo:   commentsRepo,
+		db:             db,
+		logger:         logger,
+		slaCalc:        NewSLACalculator(repo),
+		eventBus:       eventBus,
+		outboxRepo:     outboxRepo,
+		useNewComments: useNewComments,
 	}
 }
 
@@ -606,9 +612,20 @@ func (s *service) changePriority(
 	return updated, nil
 }
 
-// AddComment добавляет комментарий и при необходимости фиксирует first_response_at
-func (s *service) AddComment(ctx context.Context, input AddCommentInput) (tickets.Ticket, error) {
-	if input.Comment == "" {
+// AddComment добавляет комментарий. Dual write: запись создаётся И в
+// ticket_comments (новое хранилище, источник истины при
+// FEATURE_NEW_COMMENTS=true), И в legacy-поле tickets.comment — безусловно,
+// вне зависимости от флага, чтобы откат флага на "читать из старого поля"
+// не потерял свежие комментарии. При необходимости фиксирует
+// first_response_at, как и раньше.
+//
+// IsInternal vs "кто написал": у нас нет ролей пользователей, поэтому для
+// SLA/активности используем эвристику "публичный комментарий = ответ
+// саппорта, internal-заметка — нет" (см. isSupportComment ниже). Это не
+// идеально (клиент технически тоже может оставить публичный комментарий),
+// но сохраняет прежнее поведение системы без потери функциональности.
+func (s *service) AddComment(ctx context.Context, input tickets.AddCommentInput) (tickets.Ticket, error) {
+	if input.Content == "" {
 		return tickets.Ticket{}, ErrInvalidInput
 	}
 
@@ -618,12 +635,14 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 		return tickets.Ticket{}, fmt.Errorf("failed to get ticket: %w", err)
 	}
 
-	setFirstResponse := s.slaCalc.ShouldSetFirstResponse(existing, input.IsSupportComment)
+	isSupportComment := !input.IsInternal
+
+	setFirstResponse := s.slaCalc.ShouldSetFirstResponse(existing, isSupportComment)
 	now := time.Now()
 	if setFirstResponse {
 		existing.FirstResponseAt = &now
 	}
-	existing.Comment = input.Comment
+	existing.Comment = input.Content
 
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -640,12 +659,21 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 
 	txCtx := context.WithValue(ctx, TxContextKey, tx)
 
-	if !input.IsSupportComment {
+	if !isSupportComment {
 		if err := s.repo.UpdateLastUserActivity(txCtx, existing.ID); err != nil {
 			s.logger.Warn().Err(err).Int64("ticket_id", existing.ID).Msg("failed to update user activity")
 		}
 	}
 
+	// Новое хранилище — источник истины для комментариев.
+	if s.commentsRepo != nil {
+		if _, err = s.commentsRepo.Create(txCtx, input); err != nil {
+			s.logger.Error().Err(err).Int64("id", input.TicketID).Msg("failed to create comment")
+			return tickets.Ticket{}, fmt.Errorf("failed to create comment: %w", err)
+		}
+	}
+
+	// Dual write: legacy-поле остаётся синхронизировано.
 	updated, err := s.repo.Update(txCtx, existing)
 	if err != nil {
 		s.logger.Error().Err(err).Int64("id", input.TicketID).Msg("failed to update ticket comment")
@@ -656,7 +684,7 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 		TicketID: updated.ID,
 		UserID:   input.UserID,
 		Action:   tickets.ActionCommentAdded,
-		NewValue: input.Comment,
+		NewValue: input.Content,
 	}
 	if err = s.repo.AddHistory(txCtx, history); err != nil {
 		s.logger.Error().Err(err).Int64("ticket_id", updated.ID).Msg("failed to add comment history")
@@ -682,6 +710,93 @@ func (s *service) AddComment(ctx context.Context, input AddCommentInput) (ticket
 	}
 
 	return updated, nil
+}
+
+// GetComments возвращает комментарии тикета. При FEATURE_NEW_COMMENTS=true
+// читает из ticket_comments; иначе — fallback на legacy tickets.comment,
+// обёрнутый в срез из одного элемента (для единообразия API вне зависимости
+// от флага).
+func (s *service) GetComments(ctx context.Context, filter tickets.ListCommentsFilter) ([]tickets.TicketComment, error) {
+	if s.useNewComments {
+		comments, err := s.commentsRepo.GetByTicketID(ctx, filter)
+		if err != nil {
+			s.logger.Error().Err(err).Int64("ticket_id", filter.TicketID).Msg("failed to get comments")
+			return nil, fmt.Errorf("failed to get comments: %w", err)
+		}
+		return comments, nil
+	}
+
+	ticket, err := s.repo.GetByID(ctx, filter.TicketID)
+	if err != nil {
+		s.logger.Error().Err(err).Int64("ticket_id", filter.TicketID).Msg("failed to get ticket for legacy comment fallback")
+		return nil, fmt.Errorf("failed to get ticket: %w", err)
+	}
+	if ticket.Comment == "" {
+		return nil, nil
+	}
+
+	return []tickets.TicketComment{legacyComment(ticket)}, nil
+}
+
+// GetLastComment возвращает последний комментарий тикета — из
+// ticket_comments (FEATURE_NEW_COMMENTS=true) либо из legacy-поля.
+func (s *service) GetLastComment(ctx context.Context, ticketID int64) (*tickets.TicketComment, error) {
+	if s.useNewComments {
+		comment, err := s.commentsRepo.GetLastByTicketID(ctx, ticketID)
+		if err != nil {
+			s.logger.Error().Err(err).Int64("ticket_id", ticketID).Msg("failed to get last comment")
+			return nil, fmt.Errorf("failed to get last comment: %w", err)
+		}
+		return comment, nil
+	}
+
+	ticket, err := s.repo.GetByID(ctx, ticketID)
+	if err != nil {
+		s.logger.Error().Err(err).Int64("ticket_id", ticketID).Msg("failed to get ticket for legacy comment fallback")
+		return nil, fmt.Errorf("failed to get ticket: %w", err)
+	}
+	if ticket.Comment == "" {
+		return nil, nil
+	}
+
+	comment := legacyComment(ticket)
+	return &comment, nil
+}
+
+// legacyComment оборачивает tickets.comment в TicketComment для
+// единообразного ответа GetComments/GetLastComment при выключенном флаге.
+// UpdatedAt тикета — единственная временная метка, которая у нас есть для
+// этого "комментария" в старой модели.
+func legacyComment(ticket tickets.Ticket) tickets.TicketComment {
+	return tickets.TicketComment{
+		TicketID:  ticket.ID,
+		UserID:    ticket.UserID,
+		Content:   ticket.Comment,
+		CreatedAt: ticket.UpdatedAt,
+		UpdatedAt: ticket.UpdatedAt,
+	}
+}
+
+// UpdateComment редактирует комментарий. Работает только поверх нового
+// хранилища — у legacy-поля нет понятия "отдельный комментарий с ID".
+func (s *service) UpdateComment(ctx context.Context, input tickets.UpdateCommentInput) error {
+	if input.Content == "" {
+		return ErrInvalidInput
+	}
+	if err := s.commentsRepo.Update(ctx, input); err != nil {
+		s.logger.Error().Err(err).Int64("comment_id", input.ID).Msg("failed to update comment")
+		return fmt.Errorf("failed to update comment: %w", err)
+	}
+	return nil
+}
+
+// DeleteComment удаляет комментарий из нового хранилища.
+func (s *service) DeleteComment(ctx context.Context, id int64) error {
+	if err := s.commentsRepo.Delete(ctx, id); err != nil {
+		s.logger.Error().Err(err).Int64("comment_id", id).Msg("failed to delete comment")
+		return fmt.Errorf("failed to delete comment: %w", err)
+	}
+	return nil
 }
 
 // GetSLAViolations возвращает тикеты с нарушенным SLA

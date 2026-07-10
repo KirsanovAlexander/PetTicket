@@ -94,8 +94,24 @@ func (m *mockTicketsService) EscalateTicket(ctx context.Context, ticketID int64,
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
-func (m *mockTicketsService) AddComment(ctx context.Context, input tickets.AddCommentInput) (domain.Ticket, error) {
+func (m *mockTicketsService) AddComment(ctx context.Context, input domain.AddCommentInput) (domain.Ticket, error) {
 	return domain.Ticket{}, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) GetComments(ctx context.Context, filter domain.ListCommentsFilter) ([]domain.TicketComment, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) GetLastComment(ctx context.Context, ticketID int64) (*domain.TicketComment, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTicketsService) UpdateComment(ctx context.Context, input domain.UpdateCommentInput) error {
+	return errors.New("not implemented")
+}
+
+func (m *mockTicketsService) DeleteComment(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
 }
 
 func (m *mockTicketsService) GetSLAViolations(ctx context.Context) ([]domain.Ticket, error) {
