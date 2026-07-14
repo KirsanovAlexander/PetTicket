@@ -57,6 +57,10 @@ type Config struct {
 	// назад потерял бы свежие данные.
 	UseNewComments bool `envconfig:"FEATURE_NEW_COMMENTS" default:"false"`
 
+	// OTELExporterEndpoint — адрес OTLP/gRPC коллектора (Jaeger), куда
+	// отправляются трейсы. См. internal/infra/tracing.
+	OTELExporterEndpoint string `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT" default:"localhost:4317"`
+
 	ENV string `envconfig:"ENV" default:"local"`
 }
 

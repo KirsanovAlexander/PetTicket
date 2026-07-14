@@ -15,6 +15,7 @@ import (
 	"pet-ticket/internal/infra/config"
 	infraEvents "pet-ticket/internal/infra/events"
 	"pet-ticket/internal/infra/postgres"
+	"pet-ticket/internal/infra/tracing"
 	grpcTransport "pet-ticket/internal/transport/grpc"
 	httpTransport "pet-ticket/internal/transport/http"
 	"pet-ticket/pkg/logger"
@@ -51,6 +52,15 @@ func run() error {
 	log.Logger = appLogger
 
 	log.Info().Str("env", cfg.ENV).Msg("starting pet-ticket service")
+
+	// Инициализация трейсинга: спаны экспортируются по OTLP/gRPC в Jaeger.
+	// Ошибку не считаем фатальной для старта сервиса — недоступный Jaeger
+	// не должен ронять API.
+	if shutdownTracer, err := tracing.InitTracer("pet-ticket", cfg.OTELExporterEndpoint); err != nil {
+		log.Error().Err(err).Msg("failed to init tracer, continuing without tracing")
+	} else {
+		defer shutdownTracer()
+	}
 
 	// Подключение к БД
 	db, err := postgres.New(cfg.PostgresDSN(), postgres.Options{
@@ -125,7 +135,7 @@ func run() error {
 	)
 
 	// Transport (HTTP)
-	transport := httpTransport.New(ticketsService, appLogger, cfg.ENV)
+	transport := httpTransport.New(ticketsService, appLogger, cfg.ENV, db.Conn())
 
 	// gRPC сервер (опционально, если задан GRPC_LISTEN)
 	var grpcListener net.Listener

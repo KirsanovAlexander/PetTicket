@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"pet-ticket/internal/infra/tracing"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -27,8 +29,22 @@ func AccessLogMiddleware(logger zerolog.Logger) fiber.Handler {
 		path := c.Path()
 		method := c.Method()
 
-		// Обработка запроса
+		// Обработка запроса. Fiber вызывает ErrorHandler только в самом
+		// верху стека (router.go, после того как весь чейн Use()-миддлварей
+		// уже отработал) — поэтому если просто читать c.Response().StatusCode()
+		// после c.Next(), для ответов с ошибкой (return err из хендлера) тут
+		// будет ещё не установленный статус 200. Прогоняем ошибку через
+		// ErrorHandler сами и глушим её — так статус здесь и во всех
+		// вышестоящих middleware (Prometheus, Tracing) уже корректный,
+		// а router.go не обработает её повторно. Тот же приём — в
+		// gofiber/fiber/v2/middleware/logger.
 		err := c.Next()
+		if err != nil {
+			if handleErr := c.App().ErrorHandler(c, err); handleErr != nil {
+				_ = c.SendStatus(fiber.StatusInternalServerError)
+			}
+			err = nil
+		}
 
 		// Логирование после обработки
 		status := c.Response().StatusCode()
@@ -48,6 +64,7 @@ func AccessLogMiddleware(logger zerolog.Logger) fiber.Handler {
 
 		logEvent.
 			Str("requestId", requestID).
+			Str("trace_id", tracing.TraceIDFromCtx(c.UserContext())).
 			Str("method", method).
 			Str("path", path).
 			Int("status", status).

@@ -1,6 +1,8 @@
 package http
 
 import (
+	"context"
+	"database/sql"
 	"time"
 
 	"pet-ticket/internal/app/tickets"
@@ -17,6 +19,14 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// serviceName — имя сервиса для OTel spans/resource (совпадает с тем, что
+// ищем в Jaeger UI).
+const serviceName = "pet-ticket"
+
+// readyTimeout — сколько ждём ответа от БД в /ready, прежде чем считать
+// сервис неготовым.
+const readyTimeout = 2 * time.Second
+
 // v1Lifetime — сколько живёт v1 после старта сервиса, прежде чем в
 // Sunset-заголовке проставляется дата отключения. Отсчитывается от момента
 // запуска процесса (не хранится нигде между рестартами) — этого достаточно,
@@ -30,15 +40,17 @@ type Transport struct {
 	v2Handler *v2.TicketsHandler
 	logger    zerolog.Logger
 	env       string
+	db        *sql.DB
 }
 
 // New создаёт новый экземпляр HTTP транспорта
-func New(svc tickets.Service, logger zerolog.Logger, env string) *Transport {
+func New(svc tickets.Service, logger zerolog.Logger, env string, db *sql.DB) *Transport {
 	t := &Transport{
 		v1Handler: v1.NewTicketsHandler(svc, logger),
 		v2Handler: v2.NewTicketsHandler(svc, logger),
 		logger:    logger.With().Str("module", "transport").Logger(),
 		env:       env,
+		db:        db,
 	}
 
 	app := fiber.New(fiber.Config{
@@ -47,9 +59,19 @@ func New(svc tickets.Service, logger zerolog.Logger, env string) *Transport {
 
 	t.app = app
 
-	// Middleware (порядок важен!)
+	// Health/ready регистрируются до AuthMiddleware (и вообще до остальной
+	// цепочки) — Kubernetes probes не шлют X-User-ID, а в non-local env
+	// AuthMiddleware требует его под угрозой 401. Fiber применяет middleware
+	// в порядке регистрации (как Express): маршрут, зарегистрированный
+	// раньше app.Use(...), этой middleware не затрагивается. recover нужен
+	// в любом случае — паника в PingContext не должна ронять процесс.
 	app.Use(recover.New())
+	t.app.Get("/health", t.healthHandler)
+	t.app.Get("/ready", t.readyHandler)
+
+	// Middleware (порядок важен!)
 	app.Use(mw.RequestIDMiddleware)
+	app.Use(mw.TracingMiddleware(serviceName))
 	app.Use(mw.PrometheusMiddleware())
 	app.Use(mw.AccessLogMiddleware(t.logger))
 	app.Use(mw.AuthMiddleware(env))
@@ -93,4 +115,33 @@ func (t *Transport) setupRoutes() {
 // App возвращает экземпляр Fiber приложения
 func (t *Transport) App() *fiber.App {
 	return t.app
+}
+
+// healthHandler отвечает, что процесс жив (liveness probe) — без проверки
+// внешних зависимостей.
+func (t *Transport) healthHandler(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"service": serviceName,
+		"status":  "ok",
+	})
+}
+
+// readyHandler проверяет подключение к БД (readiness probe) — сервис готов
+// принимать трафик, только если может её опросить.
+func (t *Transport) readyHandler(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(c.Context(), readyTimeout)
+	defer cancel()
+
+	if err := t.db.PingContext(ctx); err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"service": serviceName,
+			"status":  "unavailable",
+			"error":   err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"service": serviceName,
+		"status":  "ready",
+	})
 }
