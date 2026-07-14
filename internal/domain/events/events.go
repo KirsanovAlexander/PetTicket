@@ -10,6 +10,7 @@ const (
 	EventTicketStatusChanged = "ticket.status_changed"
 	EventTicketCommentAdded  = "ticket.comment_added"
 	EventTicketAssigned      = "ticket.assigned"
+	EventTicketUnassigned    = "ticket.unassigned"
 )
 
 // Event — доменное событие: у любого события есть имя (для маршрутизации
@@ -79,13 +80,27 @@ type TicketCommentAdded struct {
 // EventName возвращает имя события.
 func (e TicketCommentAdded) EventName() string { return EventTicketCommentAdded }
 
-// TicketAssigned — тикет назначен оператору.
+// TicketAssigned — саппорт взял тикет в работу (self-assign, см. Task 13).
+// История назначения пишется напрямую в транзакции Service.AssignTicket
+// (see AddHistory там же) — это событие только для метрик/наблюдаемости,
+// HistoryHandler на него больше не подписан (иначе была бы задвоенная
+// запись в ticket_history).
 type TicketAssigned struct {
 	BaseEvent
 	TicketID   int64
-	OperatorID int64
-	AssignedBy int64
+	AssigneeID int64
 }
 
 // EventName возвращает имя события.
 func (e TicketAssigned) EventName() string { return EventTicketAssigned }
+
+// TicketUnassigned — саппорт снял с себя назначение тикета. Как и
+// TicketAssigned, только для метрик — история пишется напрямую в транзакции.
+type TicketUnassigned struct {
+	BaseEvent
+	TicketID   int64
+	AssigneeID int64
+}
+
+// EventName возвращает имя события.
+func (e TicketUnassigned) EventName() string { return EventTicketUnassigned }

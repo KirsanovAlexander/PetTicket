@@ -98,9 +98,12 @@ func run() error {
 	// Repository (реализация интерфейса из app слоя)
 	ticketsRepo := postgres.NewTicketsRepository(db)
 
-	// Event bus: HistoryHandler и MetricsHandler подписываются на все 4
-	// доменных события ДО создания Service — Service будет публиковать в
-	// уже настроенную шину.
+	// Event bus: MetricsHandler подписывается на все 6 доменных событий,
+	// HistoryHandler — только на те 3, где он сам пишет ticket_history
+	// (assigned/unassigned из Task 13 пишут историю прямо в транзакции
+	// Service.AssignTicket/UnassignTicket, см. event_handlers.go).
+	// Подписка идёт ДО создания Service — Service будет публиковать в уже
+	// настроенную шину.
 	eventBus := infraEvents.NewInMemoryBus()
 
 	historyHandler := tickets.NewHistoryHandler(ticketsRepo, appLogger)
@@ -111,13 +114,13 @@ func run() error {
 		domainEvents.EventTicketStatusChanged,
 		domainEvents.EventTicketCommentAdded,
 		domainEvents.EventTicketAssigned,
+		domainEvents.EventTicketUnassigned,
 	} {
 		eventBus.Subscribe(eventName, metricsHandler.Handle)
 	}
 	eventBus.Subscribe(domainEvents.EventTicketCreated, historyHandler.HandleTicketCreated)
 	eventBus.Subscribe(domainEvents.EventTicketStatusChanged, historyHandler.HandleTicketStatusChanged)
 	eventBus.Subscribe(domainEvents.EventTicketCommentAdded, historyHandler.HandleTicketCommentAdded)
-	eventBus.Subscribe(domainEvents.EventTicketAssigned, historyHandler.HandleTicketAssigned)
 
 	// Outbox-репозиторий: сервис пишет туда уведомления при смене статуса
 	// тикета (в той же транзакции), отдельный notification-worker их читает

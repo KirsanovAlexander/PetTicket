@@ -21,6 +21,12 @@ type Ticket struct {
 	LastUserActivityAt time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+
+	// AssignedTo/AssignedAt — саппорт, взявший тикет в работу, и когда.
+	// Version — токен optimistic locking (см. Repository.AssignWithVersion).
+	AssignedTo *int64
+	AssignedAt *time.Time
+	Version    int
 }
 
 // IsInactiveResolved проверяет, может ли тикет быть автоматически закрыт
@@ -82,4 +88,25 @@ func (t Ticket) Validate() error {
 // IsNew проверяет, является ли тикет новым (не сохранённым)
 func (t Ticket) IsNew() bool {
 	return t.ID == 0
+}
+
+// IsAssigned проверяет, взял ли кто-то тикет в работу
+func (t Ticket) IsAssigned() bool {
+	return t.AssignedTo != nil
+}
+
+// IsAssignedTo проверяет, назначен ли тикет именно на userID
+func (t Ticket) IsAssignedTo(userID int64) bool {
+	return t.AssignedTo != nil && *t.AssignedTo == userID
+}
+
+// CanBeAssigned проверяет, можно ли взять тикет в работу: он ещё никому не
+// назначен и находится в статусе, где это имеет смысл (новый или уже
+// in_progress — например, после снятия назначения предыдущим саппортом).
+// Resolved/closed/cancelled тикеты назначать нельзя.
+func (t Ticket) CanBeAssigned() bool {
+	if t.IsAssigned() {
+		return false
+	}
+	return t.Status == StatusNew || t.Status == StatusInProgress
 }

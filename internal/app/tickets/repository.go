@@ -64,6 +64,20 @@ type Repository interface {
 
 	// UpdateLastUserActivity обновляет время последней активности пользователя
 	UpdateLastUserActivity(ctx context.Context, ticketID int64) error
+
+	// AssignWithVersion атомарно назначает тикет на assigneeID при условии,
+	// что в БД версия строки всё ещё равна expectedVersion и тикет ещё не
+	// назначен (WHERE version = $N AND assigned_to IS NULL) — так при гонке
+	// нескольких саппортов ровно один UPDATE проходит. Возвращает
+	// ErrNotFound, если тикета не существует, ErrOptimisticLockConflict —
+	// если существует, но версия/назначение уже другие.
+	AssignWithVersion(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error
+
+	// UnassignWithVersion атомарно снимает назначение при условии, что тикет
+	// всё ещё назначен на assigneeID и версия строки равна expectedVersion
+	// (WHERE assigned_to = $N AND version = $M). Возвращает ErrNotFound/
+	// ErrOptimisticLockConflict аналогично AssignWithVersion.
+	UnassignWithVersion(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error
 }
 
 // StatusInfo представляет информацию о статусе из БД
@@ -87,4 +101,11 @@ type ListFilter struct {
 	Cursor    *string
 	PageSize  int
 	Direction string
+
+	// AssignedTo фильтрует тикеты, назначенные на конкретного саппорта.
+	// Unassigned — тикеты без назначения (assigned_to IS NULL). Оба поля
+	// одновременно не имеют смысла, но взаимная валидация — забота вызывающей
+	// стороны (см. v1 listTickets), а не репозитория.
+	AssignedTo *int64
+	Unassigned bool
 }

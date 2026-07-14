@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 
 	domainEvents "pet-ticket/internal/domain/events"
@@ -47,6 +48,8 @@ type mockRepository struct {
 	findSLAViolationsFunc            func(ctx context.Context) ([]domain.Ticket, error)
 	findResolvedTicketsOlderThanFunc func(ctx context.Context, inactiveDays int, limit int) ([]domain.Ticket, error)
 	updateLastUserActivityFunc       func(ctx context.Context, ticketID int64) error
+	assignWithVersionFunc            func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error
+	unassignWithVersionFunc          func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error
 }
 
 func (m *mockRepository) Create(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
@@ -157,6 +160,20 @@ func (m *mockRepository) FindResolvedTicketsOlderThan(ctx context.Context, inact
 func (m *mockRepository) UpdateLastUserActivity(ctx context.Context, ticketID int64) error {
 	if m.updateLastUserActivityFunc != nil {
 		return m.updateLastUserActivityFunc(ctx, ticketID)
+	}
+	return errors.New("not implemented")
+}
+
+func (m *mockRepository) AssignWithVersion(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+	if m.assignWithVersionFunc != nil {
+		return m.assignWithVersionFunc(ctx, ticketID, assigneeID, expectedVersion)
+	}
+	return errors.New("not implemented")
+}
+
+func (m *mockRepository) UnassignWithVersion(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+	if m.unassignWithVersionFunc != nil {
+		return m.unassignWithVersionFunc(ctx, ticketID, assigneeID, expectedVersion)
 	}
 	return errors.New("not implemented")
 }
@@ -810,110 +827,282 @@ func TestEscalateTicket_MaxPriority(t *testing.T) {
 	}
 }
 
-// TestAssignTicket_Success — назначение нового тикета на оператора переводит
-// его в in_progress (через UpdateTicket) и публикует ticket.assigned поверх
-// обычных status_changed/comment_added событий.
+// TestAssignTicket_Success — свободный ("new") тикет назначается на
+// assigneeID через AssignWithVersion (текущей версии тикета), пишет историю
+// в той же "транзакции" и публикует ticket.assigned после коммита.
 func TestAssignTicket_Success(t *testing.T) {
-	existingTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Original comment",
-	}
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Version: 3}
 
+	var gotTicketID, gotAssigneeID int64
+	var gotVersion int
+	var historyRecorded domain.History
 	repo := &mockRepository{
 		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
-		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+		assignWithVersionFunc: func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+			gotTicketID, gotAssigneeID, gotVersion = ticketID, assigneeID, expectedVersion
+			return nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			historyRecorded = history
+			return nil
+		},
 	}
 	bus := &mockEventBus{}
 	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
 
-	updated, err := svc.AssignTicket(context.Background(), AssignTicketInput{
-		TicketID:   1,
-		OperatorID: 55,
-		AssignedBy: 100,
-	})
+	err := svc.AssignTicket(context.Background(), 1, 55)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if updated.Status != domain.StatusInProgress {
-		t.Errorf("expected status in_progress, got %s", updated.Status.String())
+
+	if gotTicketID != 1 || gotAssigneeID != 55 || gotVersion != 3 {
+		t.Errorf("unexpected AssignWithVersion args: ticketID=%d assigneeID=%d version=%d", gotTicketID, gotAssigneeID, gotVersion)
+	}
+	if historyRecorded.Action != domain.ActionAssigned || historyRecorded.TicketID != 1 || historyRecorded.UserID != 55 {
+		t.Errorf("unexpected history entry: %+v", historyRecorded)
 	}
 
-	// UpdateTicket публикует status_changed (new -> in_progress) и
-	// comment_added (дефолтный комментарий "Assigned to operator"),
-	// AssignTicket сверху публикует assigned.
-	if len(bus.published) != 3 {
-		t.Fatalf("expected 3 published events (status_changed, comment_added, assigned), got %d: %+v", len(bus.published), bus.published)
+	if len(bus.published) != 1 {
+		t.Fatalf("expected 1 published event, got %d: %+v", len(bus.published), bus.published)
 	}
-
-	if _, ok := bus.published[0].(domainEvents.TicketStatusChanged); !ok {
-		t.Errorf("expected event[0] to be TicketStatusChanged, got %T", bus.published[0])
-	}
-	if _, ok := bus.published[1].(domainEvents.TicketCommentAdded); !ok {
-		t.Errorf("expected event[1] to be TicketCommentAdded, got %T", bus.published[1])
-	}
-
-	assigned, ok := bus.published[2].(domainEvents.TicketAssigned)
+	assigned, ok := bus.published[0].(domainEvents.TicketAssigned)
 	if !ok {
-		t.Fatalf("expected event[2] to be TicketAssigned, got %T", bus.published[2])
+		t.Fatalf("expected event to be TicketAssigned, got %T", bus.published[0])
 	}
-	if assigned.TicketID != 1 || assigned.OperatorID != 55 || assigned.AssignedBy != 100 {
+	if assigned.TicketID != 1 || assigned.AssigneeID != 55 {
 		t.Errorf("unexpected assigned event fields: %+v", assigned)
 	}
 }
 
-// TestAssignTicket_CustomComment — переданный комментарий используется
-// вместо дефолтного "Assigned to operator".
-func TestAssignTicket_CustomComment(t *testing.T) {
-	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "x"}
+// TestAssignTicket_Idempotent — повторный вызов с тем же assigneeID на уже
+// назначенном на него тикете — тихий успех, без похода в AssignWithVersion.
+func TestAssignTicket_Idempotent(t *testing.T) {
+	assignee := int64(55)
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusInProgress, AssignedTo: &assignee, Version: 4}
 
-	var capturedComment string
+	assignCalled := false
 	repo := &mockRepository{
 		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
-		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
-			capturedComment = ticket.Comment
-			return ticket, nil
+		assignWithVersionFunc: func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+			assignCalled = true
+			return nil
 		},
 	}
 	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
-	_, err := svc.AssignTicket(context.Background(), AssignTicketInput{
-		TicketID:   1,
-		OperatorID: 55,
-		AssignedBy: 100,
-		Comment:    "Please handle ASAP",
-	})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+	if err := svc.AssignTicket(context.Background(), 1, 55); err != nil {
+		t.Fatalf("expected no error for idempotent re-assign, got: %v", err)
 	}
-	if capturedComment != "Please handle ASAP" {
-		t.Errorf("expected custom comment to be used, got %q", capturedComment)
+	if assignCalled {
+		t.Error("expected AssignWithVersion NOT to be called for idempotent re-assign")
 	}
 }
 
-// TestAssignTicket_AlreadyAssigned_ReturnsConflict — тикет не в статусе
-// "new" -> ErrConflict, repo.Update не вызывается.
-func TestAssignTicket_AlreadyAssigned_ReturnsConflict(t *testing.T) {
-	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusInProgress, Comment: "x"}
+// TestAssignTicket_AlreadyAssignedToSomeoneElse_ReturnsConflict — тикет уже
+// назначен на другого саппорта -> ErrTicketAlreadyAssigned.
+func TestAssignTicket_AlreadyAssignedToSomeoneElse_ReturnsConflict(t *testing.T) {
+	other := int64(77)
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusInProgress, AssignedTo: &other, Version: 2}
 
-	updateCalled := false
+	assignCalled := false
 	repo := &mockRepository{
 		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
-		updateFunc: func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) {
-			updateCalled = true
-			return ticket, nil
+		assignWithVersionFunc: func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+			assignCalled = true
+			return nil
 		},
 	}
 	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
 
-	_, err := svc.AssignTicket(context.Background(), AssignTicketInput{TicketID: 1, OperatorID: 55, AssignedBy: 100})
-	if !errors.Is(err, ErrConflict) {
-		t.Errorf("expected ErrConflict, got: %v", err)
+	err := svc.AssignTicket(context.Background(), 1, 55)
+	if !errors.Is(err, ErrTicketAlreadyAssigned) {
+		t.Errorf("expected ErrTicketAlreadyAssigned, got: %v", err)
 	}
-	if updateCalled {
-		t.Error("expected repo.Update NOT to be called when ticket is already assigned")
+	if assignCalled {
+		t.Error("expected AssignWithVersion NOT to be called when ticket is already assigned to someone else")
+	}
+}
+
+// TestAssignTicket_InvalidStatus_ReturnsConflict — resolved/closed/cancelled
+// тикет нельзя назначить -> ErrInvalidStatusForAssignment.
+func TestAssignTicket_InvalidStatus_ReturnsConflict(t *testing.T) {
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusResolved, Version: 1}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+	}
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
+
+	err := svc.AssignTicket(context.Background(), 1, 55)
+	if !errors.Is(err, ErrInvalidStatusForAssignment) {
+		t.Errorf("expected ErrInvalidStatusForAssignment, got: %v", err)
+	}
+}
+
+// TestAssignTicket_OptimisticLockConflict_Propagates — конфликт версии из
+// репозитория (кто-то опередил между GetByID и AssignWithVersion) доходит до
+// вызывающей стороны как ErrTicketAlreadyAssigned (не "сырой"
+// ErrOptimisticLockConflict — клиенту не нужно различать, на каком именно
+// шаге его опередили, действие в обоих случаях одно: искать другой тикет),
+// транзакция при этом откатывается.
+func TestAssignTicket_OptimisticLockConflict_Propagates(t *testing.T) {
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Version: 1}
+
+	rollbackCalled := false
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		assignWithVersionFunc: func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+			return ErrOptimisticLockConflict
+		},
+	}
+	db := &mockDB{
+		beginTxFunc: func(ctx context.Context) (TxCommitter, error) {
+			return &mockTx{rollbackFunc: func() error { rollbackCalled = true; return nil }}, nil
+		},
+	}
+	svc := NewService(repo, nil, db, testLogger(), nil, nil, false)
+
+	err := svc.AssignTicket(context.Background(), 1, 55)
+	if !errors.Is(err, ErrTicketAlreadyAssigned) {
+		t.Errorf("expected ErrTicketAlreadyAssigned, got: %v", err)
+	}
+	if !rollbackCalled {
+		t.Error("expected transaction to be rolled back on optimistic lock conflict")
+	}
+}
+
+// TestUnassignTicket_Success — владелец снимает назначение со своего тикета.
+func TestUnassignTicket_Success(t *testing.T) {
+	assignee := int64(55)
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusInProgress, AssignedTo: &assignee, Version: 5}
+
+	var historyRecorded domain.History
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		unassignWithVersionFunc: func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+			if ticketID != 1 || assigneeID != 55 || expectedVersion != 5 {
+				t.Errorf("unexpected UnassignWithVersion args: ticketID=%d assigneeID=%d version=%d", ticketID, assigneeID, expectedVersion)
+			}
+			return nil
+		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error {
+			historyRecorded = history
+			return nil
+		},
+	}
+	bus := &mockEventBus{}
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), bus, nil, false)
+
+	if err := svc.UnassignTicket(context.Background(), 1, 55); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if historyRecorded.Action != domain.ActionUnassigned {
+		t.Errorf("expected ActionUnassigned history entry, got: %+v", historyRecorded)
+	}
+	if len(bus.published) != 1 {
+		t.Fatalf("expected 1 published event, got %d", len(bus.published))
+	}
+	if _, ok := bus.published[0].(domainEvents.TicketUnassigned); !ok {
+		t.Errorf("expected event to be TicketUnassigned, got %T", bus.published[0])
+	}
+}
+
+// TestUnassignTicket_NotAssigned_ReturnsConflict — тикет никому не назначен.
+func TestUnassignTicket_NotAssigned_ReturnsConflict(t *testing.T) {
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Version: 1}
+
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+	}
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
+
+	err := svc.UnassignTicket(context.Background(), 1, 55)
+	if !errors.Is(err, ErrTicketNotAssigned) {
+		t.Errorf("expected ErrTicketNotAssigned, got: %v", err)
+	}
+}
+
+// TestUnassignTicket_NotOwner_ReturnsForbidden — снять может только владелец.
+func TestUnassignTicket_NotOwner_ReturnsForbidden(t *testing.T) {
+	owner := int64(55)
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusInProgress, AssignedTo: &owner, Version: 2}
+
+	unassignCalled := false
+	repo := &mockRepository{
+		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },
+		unassignWithVersionFunc: func(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+			unassignCalled = true
+			return nil
+		},
+	}
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
+
+	err := svc.UnassignTicket(context.Background(), 1, 999)
+	if !errors.Is(err, ErrNotAssignedToYou) {
+		t.Errorf("expected ErrNotAssignedToYou, got: %v", err)
+	}
+	if unassignCalled {
+		t.Error("expected UnassignWithVersion NOT to be called for non-owner")
+	}
+}
+
+// TestAssignTicket_Concurrent_ExactlyOneWinner — 10 горутин одновременно
+// назначают на себя один и тот же свободный тикет через реальную
+// (stateful, mutex-protected) реализацию AssignWithVersion/GetByID —
+// MockRepository, а не func-поля mockRepository, у которых нет своего
+// состояния и поэтому нечего было бы гонять. Ожидание: ровно один вызов
+// AssignTicket возвращает nil, остальные девять — ErrTicketAlreadyAssigned
+// (AssignTicket ремаппит в него и ErrOptimisticLockConflict от репозитория —
+// клиенту не нужно различать, на каком шаге его опередили), что маппится в
+// 409 на HTTP-слое. Гоняется с -race.
+func TestAssignTicket_Concurrent_ExactlyOneWinner(t *testing.T) {
+	const workers = 10
+
+	repo := NewMockRepository()
+	repo.Seed(domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Version: 1})
+
+	svc := NewService(repo, nil, &mockDB{}, testLogger(), nil, nil, false)
+
+	var wg sync.WaitGroup
+	errs := make([]error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(assigneeID int64) {
+			defer wg.Done()
+			errs[assigneeID-1] = svc.AssignTicket(context.Background(), 1, assigneeID)
+		}(int64(i + 1))
+	}
+	wg.Wait()
+
+	successes := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrTicketAlreadyAssigned):
+			// ожидаемый исход для проигравших
+		default:
+			t.Errorf("unexpected error from concurrent AssignTicket: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Errorf("expected exactly 1 successful assignment out of %d concurrent attempts, got %d", workers, successes)
+	}
+
+	final, err := repo.GetByID(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("failed to get final ticket state: %v", err)
+	}
+	if final.AssignedTo == nil {
+		t.Fatal("expected ticket to end up assigned")
+	}
+	if final.Version != 2 {
+		t.Errorf("expected version to be bumped exactly once (1 -> 2), got %d", final.Version)
+	}
+
+	history := repo.History()
+	if len(history) != 1 {
+		t.Errorf("expected exactly 1 history entry (from the single winner), got %d: %+v", len(history), history)
 	}
 }
 

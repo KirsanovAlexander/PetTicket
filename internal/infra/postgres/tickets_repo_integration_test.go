@@ -5,9 +5,11 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,7 +93,7 @@ func applyMigrations(db *sql.DB) error {
 		"001_init.up.sql", "002_add_priorities.up.sql", "003_add_sla.up.sql",
 		"004_add_last_activity.up.sql", "005_add_performance_indexes.up.sql",
 		"006_add_notification_outbox.up.sql", "007_add_comments_table.up.sql",
-		"008_migrate_existing_comments.up.sql",
+		"008_migrate_existing_comments.up.sql", "009_add_assignment.up.sql",
 	}
 
 	for _, name := range files {
@@ -735,6 +737,252 @@ func TestTicketsRepository_List_FilterByPriority_Integration(t *testing.T) {
 	}
 	if sorted[0].Priority != domain.PriorityCritical {
 		t.Errorf("expected highest priority first, got %s", sorted[0].Priority.String())
+	}
+}
+
+// TestTicketsRepository_AssignWithVersion_Integration — успешное назначение:
+// версия бампается, статус переходит в in_progress, assigned_to/assigned_at
+// проставляются.
+func TestTicketsRepository_AssignWithVersion_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID: 2000, TopicID: 1, Status: domain.StatusNew, Comment: "Assign me",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+	if created.Version != 1 {
+		t.Fatalf("expected freshly created ticket to have version 1, got %d", created.Version)
+	}
+
+	if err := repo.AssignWithVersion(ctx, created.ID, 5001, created.Version); err != nil {
+		t.Fatalf("failed to assign ticket: %v", err)
+	}
+
+	found, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+	if found.AssignedTo == nil || *found.AssignedTo != 5001 {
+		t.Errorf("expected assigned_to 5001, got %+v", found.AssignedTo)
+	}
+	if found.AssignedAt == nil {
+		t.Error("expected assigned_at to be set")
+	}
+	if found.Status != domain.StatusInProgress {
+		t.Errorf("expected status in_progress, got %s", found.Status)
+	}
+	if found.Version != created.Version+1 {
+		t.Errorf("expected version %d, got %d", created.Version+1, found.Version)
+	}
+}
+
+// TestTicketsRepository_AssignWithVersion_OptimisticLockConflict_Integration
+// — устаревшая версия -> ErrOptimisticLockConflict, тикет не меняется.
+func TestTicketsRepository_AssignWithVersion_OptimisticLockConflict_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID: 2001, TopicID: 1, Status: domain.StatusNew, Comment: "Stale version",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+
+	staleVersion := created.Version + 999
+	err = repo.AssignWithVersion(ctx, created.ID, 5002, staleVersion)
+	if !errors.Is(err, apptickets.ErrOptimisticLockConflict) {
+		t.Errorf("expected ErrOptimisticLockConflict, got: %v", err)
+	}
+
+	found, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+	if found.AssignedTo != nil {
+		t.Errorf("expected ticket to remain unassigned after conflict, got assigned_to=%v", found.AssignedTo)
+	}
+}
+
+// TestTicketsRepository_AssignWithVersion_AlreadyAssigned_Integration —
+// повторный AssignWithVersion другим assigneeID на уже назначенный тикет ->
+// ErrOptimisticLockConflict, даже если версию передали правильную (WHERE
+// содержит ещё и assigned_to IS NULL).
+func TestTicketsRepository_AssignWithVersion_AlreadyAssigned_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID: 2002, TopicID: 1, Status: domain.StatusNew, Comment: "Already taken",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+	if err := repo.AssignWithVersion(ctx, created.ID, 5003, created.Version); err != nil {
+		t.Fatalf("failed first assign: %v", err)
+	}
+
+	afterFirst, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+
+	err = repo.AssignWithVersion(ctx, created.ID, 5004, afterFirst.Version)
+	if !errors.Is(err, apptickets.ErrOptimisticLockConflict) {
+		t.Errorf("expected ErrOptimisticLockConflict for already-assigned ticket, got: %v", err)
+	}
+}
+
+// TestTicketsRepository_AssignWithVersion_NotFound_Integration —
+// несуществующий тикет -> ErrNotFound, не ErrOptimisticLockConflict.
+func TestTicketsRepository_AssignWithVersion_NotFound_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	err := repo.AssignWithVersion(ctx, 999999, 5005, 1)
+	if !errors.Is(err, apptickets.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+// TestTicketsRepository_UnassignWithVersion_Integration — успешное снятие
+// назначения владельцем: assigned_to/assigned_at очищаются, версия бампается.
+func TestTicketsRepository_UnassignWithVersion_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID: 2003, TopicID: 1, Status: domain.StatusNew, Comment: "Unassign me",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+	if err := repo.AssignWithVersion(ctx, created.ID, 5006, created.Version); err != nil {
+		t.Fatalf("failed to assign: %v", err)
+	}
+	afterAssign, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+
+	if err := repo.UnassignWithVersion(ctx, created.ID, 5006, afterAssign.Version); err != nil {
+		t.Fatalf("failed to unassign: %v", err)
+	}
+
+	found, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+	if found.AssignedTo != nil {
+		t.Errorf("expected assigned_to to be cleared, got %v", found.AssignedTo)
+	}
+	if found.AssignedAt != nil {
+		t.Errorf("expected assigned_at to be cleared, got %v", found.AssignedAt)
+	}
+	if found.Version != afterAssign.Version+1 {
+		t.Errorf("expected version %d, got %d", afterAssign.Version+1, found.Version)
+	}
+}
+
+// TestTicketsRepository_UnassignWithVersion_WrongOwner_Integration — снять
+// назначение не-владельцем -> ErrOptimisticLockConflict (WHERE содержит
+// assigned_to = $2), тикет остаётся назначенным на прежнего владельца.
+func TestTicketsRepository_UnassignWithVersion_WrongOwner_Integration(t *testing.T) {
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID: 2004, TopicID: 1, Status: domain.StatusNew, Comment: "Owned by 5007",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+	if err := repo.AssignWithVersion(ctx, created.ID, 5007, created.Version); err != nil {
+		t.Fatalf("failed to assign: %v", err)
+	}
+	afterAssign, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+
+	err = repo.UnassignWithVersion(ctx, created.ID, 9999, afterAssign.Version)
+	if !errors.Is(err, apptickets.ErrOptimisticLockConflict) {
+		t.Errorf("expected ErrOptimisticLockConflict, got: %v", err)
+	}
+
+	found, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get ticket: %v", err)
+	}
+	if found.AssignedTo == nil || *found.AssignedTo != 5007 {
+		t.Errorf("expected ticket to remain assigned to 5007, got %v", found.AssignedTo)
+	}
+}
+
+// TestTicketsRepository_AssignWithVersion_Concurrent20Workers_Integration —
+// 20 горутин одновременно назначают на себя один и тот же свободный тикет
+// через реальную PostgreSQL. WHERE version = $N AND assigned_to IS NULL
+// гарантирует ровно один успешный UPDATE — проверяем это не на моке, а на
+// настоящей БД под конкурентной нагрузкой.
+func TestTicketsRepository_AssignWithVersion_Concurrent20Workers_Integration(t *testing.T) {
+	const workers = 20
+
+	testDB := setupTestDB(t)
+	repo := NewTicketsRepository(testDB.db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, domain.Ticket{
+		UserID: 2005, TopicID: 1, Status: domain.StatusNew, Comment: "Race me",
+	})
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(idx int, assigneeID int64) {
+			defer wg.Done()
+			errs[idx] = repo.AssignWithVersion(ctx, created.ID, assigneeID, created.Version)
+		}(i, int64(6000+i))
+	}
+	wg.Wait()
+
+	successes := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, apptickets.ErrOptimisticLockConflict):
+			// ожидаемо для проигравших — все стартуют с одной и той же
+			// created.Version, поэтому здесь не бывает ErrNotFound.
+		default:
+			t.Errorf("unexpected error from concurrent AssignWithVersion: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Errorf("expected exactly 1 successful assignment out of %d concurrent workers, got %d", workers, successes)
+	}
+
+	found, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get final ticket state: %v", err)
+	}
+	if found.AssignedTo == nil {
+		t.Fatal("expected ticket to end up assigned")
+	}
+	if found.Version != created.Version+1 {
+		t.Errorf("expected version to be bumped exactly once (%d -> %d), got %d", created.Version, created.Version+1, found.Version)
 	}
 }
 

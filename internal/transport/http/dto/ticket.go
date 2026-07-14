@@ -38,6 +38,9 @@ type TicketResponse struct {
 	FirstResponseAt  *time.Time `json:"firstResponseAt,omitempty"`
 	ResolvedAt       *time.Time `json:"resolvedAt,omitempty"`
 	SLAStatus        string    `json:"slaStatus,omitempty"`
+	AssignedTo       *int64     `json:"assignedTo,omitempty"`
+	AssignedAt       *time.Time `json:"assignedAt,omitempty"`
+	Version          int        `json:"version"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
@@ -106,9 +109,10 @@ type ErrorResponse struct {
 
 // ErrorDetail содержит детали ошибки
 type ErrorDetail struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"requestId"`
+	Code      string         `json:"code"`
+	Message   string         `json:"message"`
+	RequestID string         `json:"requestId"`
+	Details   map[string]any `json:"details,omitempty"`
 }
 
 // ToTicketResponse конвертирует доменную модель в DTO
@@ -131,6 +135,9 @@ func ToTicketResponse(ticket domain.Ticket) TicketResponse {
 		FirstResponseAt:    ticket.FirstResponseAt,
 		ResolvedAt:         ticket.ResolvedAt,
 		SLAStatus:          string(sla.OverallStatus),
+		AssignedTo:         ticket.AssignedTo,
+		AssignedAt:         ticket.AssignedAt,
+		Version:            ticket.Version,
 		CreatedAt:          ticket.CreatedAt,
 		UpdatedAt:          ticket.UpdatedAt,
 	}

@@ -39,7 +39,8 @@ type mockTicketsService struct {
 	deleteCommentFunc         func(ctx context.Context, id int64) error
 	getSLAViolationsFunc      func(ctx context.Context) ([]domain.Ticket, error)
 	closeTicketFunc           func(ctx context.Context, input tickets.CloseTicketInput) (domain.Ticket, error)
-	assignTicketFunc          func(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error)
+	assignTicketFunc          func(ctx context.Context, ticketID, assigneeID int64) error
+	unassignTicketFunc        func(ctx context.Context, ticketID, assigneeID int64) error
 }
 
 func (m *mockTicketsService) CreateTicket(ctx context.Context, input tickets.CreateTicketInput) (domain.Ticket, error) {
@@ -182,11 +183,18 @@ func (m *mockTicketsService) CloseTicket(ctx context.Context, input tickets.Clos
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
-func (m *mockTicketsService) AssignTicket(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error) {
+func (m *mockTicketsService) AssignTicket(ctx context.Context, ticketID, assigneeID int64) error {
 	if m.assignTicketFunc != nil {
-		return m.assignTicketFunc(ctx, input)
+		return m.assignTicketFunc(ctx, ticketID, assigneeID)
 	}
-	return domain.Ticket{}, errors.New("not implemented")
+	return errors.New("not implemented")
+}
+
+func (m *mockTicketsService) UnassignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	if m.unassignTicketFunc != nil {
+		return m.unassignTicketFunc(ctx, ticketID, assigneeID)
+	}
+	return errors.New("not implemented")
 }
 
 // TestGetTicket_Success — успешное получение тикета через HTTP

@@ -99,8 +99,12 @@ func (m *mockService) CloseTicket(ctx context.Context, input CloseTicketInput) (
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
-func (m *mockService) AssignTicket(ctx context.Context, input AssignTicketInput) (domain.Ticket, error) {
-	return domain.Ticket{}, errors.New("not implemented")
+func (m *mockService) AssignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	return errors.New("not implemented")
+}
+
+func (m *mockService) UnassignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	return errors.New("not implemented")
 }
 
 func TestAutoCloser_CloseInactiveTickets_Success(t *testing.T) {

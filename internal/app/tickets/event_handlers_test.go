@@ -149,38 +149,6 @@ func TestHistoryHandler_HandleTicketCommentAdded(t *testing.T) {
 	}
 }
 
-func TestHistoryHandler_HandleTicketAssigned(t *testing.T) {
-	var captured domain.History
-	repo := &mockRepository{
-		addHistoryFunc: func(ctx context.Context, history domain.History) error {
-			captured = history
-			return nil
-		},
-	}
-	h := NewHistoryHandler(repo, testLogger())
-
-	event := domainEvents.TicketAssigned{
-		BaseEvent:  domainEvents.NewBaseEvent(),
-		TicketID:   1,
-		OperatorID: 55,
-		AssignedBy: 100,
-	}
-
-	if err := h.HandleTicketAssigned(context.Background(), event); err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	if captured.Action != domain.ActionAssigned {
-		t.Errorf("expected action 'assigned', got %s", captured.Action)
-	}
-	if captured.UserID != 100 {
-		t.Errorf("expected user_id 100 (assigned_by), got %d", captured.UserID)
-	}
-	if captured.NewValue != "operator=55" {
-		t.Errorf("expected new_value 'operator=55', got %s", captured.NewValue)
-	}
-}
-
 func TestHistoryHandler_PropagatesRepositoryError(t *testing.T) {
 	repo := &mockRepository{
 		addHistoryFunc: func(ctx context.Context, history domain.History) error {
@@ -203,6 +171,7 @@ func TestMetricsHandler_HandleDoesNotError(t *testing.T) {
 		domainEvents.TicketStatusChanged{BaseEvent: domainEvents.NewBaseEvent()},
 		domainEvents.TicketCommentAdded{BaseEvent: domainEvents.NewBaseEvent()},
 		domainEvents.TicketAssigned{BaseEvent: domainEvents.NewBaseEvent()},
+		domainEvents.TicketUnassigned{BaseEvent: domainEvents.NewBaseEvent()},
 	}
 
 	for _, e := range events {

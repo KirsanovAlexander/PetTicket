@@ -52,6 +52,7 @@ type TicketFull struct {
 	SLA       *SLAInfo
 	Amount    *float64
 	Comment   string
+	Version   int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

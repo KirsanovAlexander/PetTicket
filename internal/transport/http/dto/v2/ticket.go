@@ -59,6 +59,7 @@ type TicketResponse struct {
 	Comment   string            `json:"comment"`
 	Comments  []CommentResponse `json:"comments"`
 	SLA       *SLAResponse      `json:"sla,omitempty"`
+	Version   int               `json:"version"`
 	CreatedAt time.Time         `json:"createdAt"`
 	UpdatedAt time.Time         `json:"updatedAt"`
 }
@@ -97,6 +98,7 @@ func MapTicketFullToResponse(t domain.TicketFull) TicketResponse {
 		Amount:    t.Amount,
 		Comment:   t.Comment,
 		Comments:  mapComments(t.Comments),
+		Version:   t.Version,
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: t.UpdatedAt,
 	}

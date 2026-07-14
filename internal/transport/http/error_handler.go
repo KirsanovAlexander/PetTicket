@@ -47,6 +47,26 @@ func NewErrorHandler(logger zerolog.Logger, env string) fiber.ErrorHandler {
 			code = fiber.StatusBadRequest
 			errorCode = "INVALID_CURSOR"
 			message = "cursor is invalid or malformed"
+		case errors.Is(err, tickets.ErrInvalidStatusForAssignment):
+			code = fiber.StatusBadRequest
+			errorCode = "INVALID_STATUS_FOR_ASSIGNMENT"
+			message = "ticket status does not allow assignment"
+		case errors.Is(err, tickets.ErrNotAssignedToYou):
+			code = fiber.StatusForbidden
+			errorCode = "NOT_ASSIGNED_TO_YOU"
+			message = "ticket is not assigned to you"
+		case errors.Is(err, tickets.ErrTicketAlreadyAssigned):
+			code = fiber.StatusConflict
+			errorCode = "TICKET_ALREADY_ASSIGNED"
+			message = "ticket already assigned"
+		case errors.Is(err, tickets.ErrTicketNotAssigned):
+			code = fiber.StatusConflict
+			errorCode = "TICKET_NOT_ASSIGNED"
+			message = "ticket is not assigned"
+		case errors.Is(err, tickets.ErrOptimisticLockConflict):
+			code = fiber.StatusConflict
+			errorCode = "OPTIMISTIC_LOCK_CONFLICT"
+			message = "ticket was modified concurrently, please retry"
 		}
 
 		// Request ID для трейсинга

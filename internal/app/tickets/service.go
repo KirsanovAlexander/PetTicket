@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,6 +54,11 @@ type ListTicketsInput struct {
 	Offset   int
 	SortBy   string
 	SortDesc bool
+
+	// AssignedTo/Unassigned — фильтрация по назначению (Task 13). Unassigned
+	// имеет приоритет, если оба заданы одновременно (см. ListFilter).
+	AssignedTo *int64
+	Unassigned bool
 }
 
 // ListTicketsWithCursorInput входные данные для cursor-пагинации списка тикетов
@@ -80,14 +86,6 @@ type CloseTicketInput struct {
 	Reason   string
 }
 
-// AssignTicketInput входные данные для назначения тикета оператору
-type AssignTicketInput struct {
-	TicketID   int64
-	OperatorID int64
-	AssignedBy int64
-	Comment    string
-}
-
 // Service определяет бизнес-логику работы с тикетами
 type Service interface {
 	CreateTicket(ctx context.Context, input CreateTicketInput) (tickets.Ticket, error)
@@ -110,7 +108,17 @@ type Service interface {
 	DeleteComment(ctx context.Context, id int64) error
 	GetSLAViolations(ctx context.Context) ([]tickets.Ticket, error)
 	CloseTicket(ctx context.Context, input CloseTicketInput) (tickets.Ticket, error)
-	AssignTicket(ctx context.Context, input AssignTicketInput) (tickets.Ticket, error)
+
+	// AssignTicket — саппорт (assigneeID) берёт свободный тикет в работу.
+	// Идемпотентно: повторный вызов с тем же assigneeID на уже назначенном
+	// на него тикете возвращает nil. При гонке нескольких саппортов за один
+	// тикет ровно один вызов завершается успешно, остальные получают
+	// ErrOptimisticLockConflict (см. Repository.AssignWithVersion).
+	AssignTicket(ctx context.Context, ticketID, assigneeID int64) error
+
+	// UnassignTicket снимает назначение — только владелец (assigneeID
+	// должен совпадать с текущим Ticket.AssignedTo), иначе ErrNotAssignedToYou.
+	UnassignTicket(ctx context.Context, ticketID, assigneeID int64) error
 }
 
 // service реализует интерфейс Service
@@ -385,14 +393,16 @@ func (s *service) DeleteTicket(ctx context.Context, id int64) error {
 // ListTickets возвращает список тикетов
 func (s *service) ListTickets(ctx context.Context, input ListTicketsInput) ([]tickets.Ticket, error) {
 	filter := ListFilter{
-		UserID:   input.UserID,
-		TopicID:  input.TopicID,
-		Status:   input.Status,
-		Priority: input.Priority,
-		Limit:    input.Limit,
-		Offset:   input.Offset,
-		SortBy:   input.SortBy,
-		SortDesc: input.SortDesc,
+		UserID:     input.UserID,
+		TopicID:    input.TopicID,
+		Status:     input.Status,
+		Priority:   input.Priority,
+		Limit:      input.Limit,
+		Offset:     input.Offset,
+		SortBy:     input.SortBy,
+		SortDesc:   input.SortDesc,
+		AssignedTo: input.AssignedTo,
+		Unassigned: input.Unassigned,
 	}
 
 	list, err := s.repo.List(ctx, filter)
@@ -468,14 +478,16 @@ func (s *service) GetTicketFull(ctx context.Context, id int64) (tickets.TicketFu
 // (v2 API). Использует те же фильтры и offset-пагинацию, что и ListTickets.
 func (s *service) ListTicketsFull(ctx context.Context, input ListTicketsInput) ([]tickets.TicketFull, error) {
 	filter := ListFilter{
-		UserID:   input.UserID,
-		TopicID:  input.TopicID,
-		Status:   input.Status,
-		Priority: input.Priority,
-		Limit:    input.Limit,
-		Offset:   input.Offset,
-		SortBy:   input.SortBy,
-		SortDesc: input.SortDesc,
+		UserID:     input.UserID,
+		TopicID:    input.TopicID,
+		Status:     input.Status,
+		Priority:   input.Priority,
+		Limit:      input.Limit,
+		Offset:     input.Offset,
+		SortBy:     input.SortBy,
+		SortDesc:   input.SortDesc,
+		AssignedTo: input.AssignedTo,
+		Unassigned: input.Unassigned,
 	}
 
 	list, err := s.repo.ListFull(ctx, filter)
@@ -866,50 +878,150 @@ func (s *service) CloseTicket(ctx context.Context, input CloseTicketInput) (tick
 	return updated, nil
 }
 
-// AssignTicket назначает новый ("new") тикет на оператора: переводит его в
-// статус in_progress через UpdateTicket (это уже публикует
-// ticket.status_changed/ticket.comment_added по обычным правилам) и
-// дополнительно публикует ticket.assigned с ID оператора — для истории
-// назначения, которую события статуса сами по себе не несут.
-func (s *service) AssignTicket(ctx context.Context, input AssignTicketInput) (tickets.Ticket, error) {
-	existing, err := s.repo.GetByID(ctx, input.TicketID)
+// AssignTicket — саппорт (assigneeID) берёт свободный тикет в работу.
+// Порядок проверок важен: сначала идемпотентность (тикет уже назначен на
+// того же assigneeID — просто успех, без похода в БД на запись), затем
+// причина, по которой назначить нельзя (уже занят кем-то другим vs статус
+// не тот). Сама атомарность гонки нескольких саппортов обеспечивается не
+// здесь, а в Repository.AssignWithVersion (WHERE version = $N AND
+// assigned_to IS NULL) — эта функция только готовит транзакцию и переводит
+// SQL-ошибку конфликта версии в бизнес-ошибку.
+func (s *service) AssignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	ticket, err := s.repo.GetByID(ctx, ticketID)
 	if err != nil {
-		return tickets.Ticket{}, fmt.Errorf("failed to get ticket: %w", err)
+		return fmt.Errorf("failed to get ticket: %w", err)
 	}
 
-	if existing.Status != tickets.StatusNew {
-		return tickets.Ticket{}, fmt.Errorf("%w: ticket already assigned or in progress", ErrConflict)
+	if ticket.IsAssignedTo(assigneeID) {
+		return nil
 	}
 
-	comment := "Assigned to operator"
-	if input.Comment != "" {
-		comment = input.Comment
+	if !ticket.CanBeAssigned() {
+		if ticket.IsAssigned() {
+			return ErrTicketAlreadyAssigned
+		}
+		return ErrInvalidStatusForAssignment
 	}
-	status := tickets.StatusInProgress
 
-	updated, err := s.UpdateTicket(ctx, UpdateTicketInput{
-		ID:      input.TicketID,
-		Status:  &status,
-		Comment: &comment,
-	})
+	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
-		return tickets.Ticket{}, err
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				s.logger.Error().Err(rbErr).Msg("failed to rollback transaction")
+			}
+		}
+	}()
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
+
+	if assignErr := s.repo.AssignWithVersion(txCtx, ticketID, assigneeID, ticket.Version); assignErr != nil {
+		err = assignErr // для deferred Rollback — гонка реальна, откатываем в любом случае
+		if errors.Is(assignErr, ErrOptimisticLockConflict) {
+			// С точки зрения клиента нет разницы между "тикет уже был занят,
+			// когда мы его прочитали" (поймано выше через CanBeAssigned) и
+			// "тикет был свободен, но кто-то успел раньше нас на самой
+			// записи" (этот случай) — в обоих случаях правильное действие
+			// одно и то же: искать другой тикет, а не повторять этот же
+			// запрос. Отдельный код ошибки только запутал бы клиента.
+			return ErrTicketAlreadyAssigned
+		}
+		return fmt.Errorf("failed to assign ticket: %w", assignErr)
+	}
+
+	history := tickets.History{
+		TicketID: ticketID,
+		UserID:   assigneeID,
+		Action:   tickets.ActionAssigned,
+		NewValue: fmt.Sprintf("assignee=%d", assigneeID),
+	}
+	if err = s.repo.AddHistory(txCtx, history); err != nil {
+		return fmt.Errorf("failed to add history: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	if s.eventBus != nil {
 		_ = s.eventBus.Publish(ctx, domainEvents.TicketAssigned{
 			BaseEvent:  domainEvents.NewBaseEvent(),
-			TicketID:   updated.ID,
-			OperatorID: input.OperatorID,
-			AssignedBy: input.AssignedBy,
+			TicketID:   ticketID,
+			AssigneeID: assigneeID,
 		})
 	}
 
 	s.logger.Info().
-		Int64("ticket_id", updated.ID).
-		Int64("operator_id", input.OperatorID).
-		Int64("assigned_by", input.AssignedBy).
+		Int64("ticket_id", ticketID).
+		Int64("assignee_id", assigneeID).
 		Msg("ticket assigned")
 
-	return updated, nil
+	return nil
+}
+
+// UnassignTicket снимает назначение — только владелец (assigneeID должен
+// совпадать с Ticket.AssignedTo). Не идемпотентно в смысле "тикет уже
+// свободен": повторный вызов вернёт ErrTicketNotAssigned, а не тихий успех —
+// в отличие от AssignTicket здесь нет второго саппорта, для которого нужна
+// была бы гладкая идемпотентность, только сам владелец.
+func (s *service) UnassignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	ticket, err := s.repo.GetByID(ctx, ticketID)
+	if err != nil {
+		return fmt.Errorf("failed to get ticket: %w", err)
+	}
+
+	if !ticket.IsAssigned() {
+		return ErrTicketNotAssigned
+	}
+
+	if !ticket.IsAssignedTo(assigneeID) {
+		return ErrNotAssignedToYou
+	}
+
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				s.logger.Error().Err(rbErr).Msg("failed to rollback transaction")
+			}
+		}
+	}()
+	txCtx := context.WithValue(ctx, TxContextKey, tx)
+
+	if err = s.repo.UnassignWithVersion(txCtx, ticketID, assigneeID, ticket.Version); err != nil {
+		return fmt.Errorf("failed to unassign ticket: %w", err)
+	}
+
+	history := tickets.History{
+		TicketID: ticketID,
+		UserID:   assigneeID,
+		Action:   tickets.ActionUnassigned,
+		OldValue: fmt.Sprintf("assignee=%d", assigneeID),
+	}
+	if err = s.repo.AddHistory(txCtx, history); err != nil {
+		return fmt.Errorf("failed to add history: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	if s.eventBus != nil {
+		_ = s.eventBus.Publish(ctx, domainEvents.TicketUnassigned{
+			BaseEvent:  domainEvents.NewBaseEvent(),
+			TicketID:   ticketID,
+			AssigneeID: assigneeID,
+		})
+	}
+
+	s.logger.Info().
+		Int64("ticket_id", ticketID).
+		Int64("assignee_id", assigneeID).
+		Msg("ticket unassigned")
+
+	return nil
 }

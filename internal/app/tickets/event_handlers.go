@@ -11,11 +11,19 @@ import (
 )
 
 // HistoryHandler подписывается на доменные события и пишет историю тикета
-// через Repository — единственное место, которое зовёт repo.AddHistory для
-// created/status_changed/comment_added/assigned. Сервис сам эти записи
-// больше не создаёт (см. app/tickets/service.go): он публикует событие
-// уже после коммита транзакции, а запись в ticket_history — отдельная,
-// самостоятельная операция, которую выполняет этот обработчик.
+// через Repository для created/status_changed/comment_added. Сервис сам эти
+// записи больше не создаёт (см. app/tickets/service.go): он публикует
+// событие уже после коммита транзакции, а запись в ticket_history —
+// отдельная, самостоятельная операция, которую выполняет этот обработчик.
+//
+// Исключение — назначение/снятие назначения (assigned/unassigned, Task 13):
+// там история пишется напрямую в той же транзакции, что и сам
+// AssignWithVersion/UnassignWithVersion (см. Service.AssignTicket) — это
+// важная запись аудита, а не best-effort side-effect, поэтому ей не подходит
+// fire-and-forget паттерн остальных обработчиков ниже (публикация события
+// после коммита с проигнорированной ошибкой). ticket.assigned/
+// ticket.unassigned всё равно публикуются — но только для MetricsHandler,
+// HistoryHandler на них не подписан (иначе была бы задвоенная запись).
 //
 // Методы имеют сигнатуру infraEvents.Handler и подключаются к шине в
 // cmd/api-server/main.go — сам HistoryHandler ничего не знает про
@@ -106,26 +114,6 @@ func (h *HistoryHandler) HandleTicketCommentAdded(ctx context.Context, event dom
 	}
 	if err := h.repo.AddHistory(ctx, history); err != nil {
 		h.logger.Error().Err(err).Int64("ticket_id", e.TicketID).Msg("failed to record comment_added history")
-		return fmt.Errorf("failed to add history: %w", err)
-	}
-	return nil
-}
-
-// HandleTicketAssigned записывает историю по событию ticket.assigned.
-func (h *HistoryHandler) HandleTicketAssigned(ctx context.Context, event domainEvents.Event) error {
-	e, ok := event.(domainEvents.TicketAssigned)
-	if !ok {
-		return fmt.Errorf("history handler: unexpected event type %T for %s", event, domainEvents.EventTicketAssigned)
-	}
-
-	history := domain.History{
-		TicketID: e.TicketID,
-		UserID:   e.AssignedBy,
-		Action:   domain.ActionAssigned,
-		NewValue: fmt.Sprintf("operator=%d", e.OperatorID),
-	}
-	if err := h.repo.AddHistory(ctx, history); err != nil {
-		h.logger.Error().Err(err).Int64("ticket_id", e.TicketID).Msg("failed to record assigned history")
 		return fmt.Errorf("failed to add history: %w", err)
 	}
 	return nil

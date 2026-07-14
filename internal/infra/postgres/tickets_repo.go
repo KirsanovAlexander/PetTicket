@@ -42,7 +42,8 @@ func (r *TicketsRepository) getExecutor(ctx context.Context) Executor {
 const ticketSelectColumns = `
 	id, user_id, topic_id, status_id, priority_id, amount, comment,
 	response_deadline, resolution_deadline, first_response_at, resolved_at,
-	last_user_activity_at, created_at, updated_at
+	last_user_activity_at, created_at, updated_at,
+	assigned_to, assigned_at, version
 `
 
 func scanTicket(scanner interface {
@@ -52,6 +53,8 @@ func scanTicket(scanner interface {
 	var statusID, priorityID int
 	var responseDeadline, resolutionDeadline, firstResponseAt, resolvedAt sql.NullTime
 	var lastUserActivityAt sql.NullTime
+	var assignedTo sql.NullInt64
+	var assignedAt sql.NullTime
 
 	err := scanner.Scan(
 		&ticket.ID,
@@ -68,6 +71,9 @@ func scanTicket(scanner interface {
 		&lastUserActivityAt,
 		&ticket.CreatedAt,
 		&ticket.UpdatedAt,
+		&assignedTo,
+		&assignedAt,
+		&ticket.Version,
 	)
 	if err != nil {
 		return domain.Ticket{}, err
@@ -92,6 +98,14 @@ func scanTicket(scanner interface {
 	if lastUserActivityAt.Valid {
 		ticket.LastUserActivityAt = lastUserActivityAt.Time
 	}
+	if assignedTo.Valid {
+		id := assignedTo.Int64
+		ticket.AssignedTo = &id
+	}
+	if assignedAt.Valid {
+		t := assignedAt.Time
+		ticket.AssignedAt = &t
+	}
 
 	return ticket, nil
 }
@@ -109,7 +123,7 @@ func (r *TicketsRepository) Create(ctx context.Context, ticket domain.Ticket) (d
 			response_deadline, resolution_deadline
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, created_at, updated_at
+		RETURNING id, created_at, updated_at, version
 	`
 
 	exec := r.getExecutor(ctx)
@@ -122,7 +136,7 @@ func (r *TicketsRepository) Create(ctx context.Context, ticket domain.Ticket) (d
 		ticket.Comment,
 		ticket.ResponseDeadline,
 		ticket.ResolutionDeadline,
-	).Scan(&ticket.ID, &ticket.CreatedAt, &ticket.UpdatedAt)
+	).Scan(&ticket.ID, &ticket.CreatedAt, &ticket.UpdatedAt, &ticket.Version)
 
 	if err != nil {
 		return domain.Ticket{}, fmt.Errorf("failed to create ticket: %w", err)
@@ -185,6 +199,70 @@ func (r *TicketsRepository) Update(ctx context.Context, ticket domain.Ticket) (d
 	return ticket, nil
 }
 
+// AssignWithVersion атомарно назначает тикет на assigneeID: WHERE version =
+// $3 AND assigned_to IS NULL гарантирует, что при гонке нескольких саппортов
+// UPDATE применится только у одного из них (у остальных к моменту их
+// собственного UPDATE версия строки уже не будет совпадать с той, что они
+// прочитали через GetByID). status_id переводится в in_progress той же
+// командой — отдельного похода за статусом не нужно.
+func (r *TicketsRepository) AssignWithVersion(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+	query := `
+		UPDATE tickets
+		SET assigned_to = $1, assigned_at = NOW(), status_id = $4,
+		    version = version + 1, updated_at = NOW()
+		WHERE id = $2 AND version = $3 AND assigned_to IS NULL
+	`
+	exec := r.getExecutor(ctx)
+	result, err := exec.ExecContext(ctx, query, assigneeID, ticketID, expectedVersion, int(domain.StatusInProgress))
+	if err != nil {
+		return fmt.Errorf("failed to assign ticket: %w", err)
+	}
+	return r.checkVersionedUpdate(ctx, result, ticketID)
+}
+
+// UnassignWithVersion атомарно снимает назначение: WHERE assigned_to = $2
+// AND version = $3 — снять может только текущий владелец, и только если
+// версия строки не уехала с момента его GetByID. Статус не трогаем: тикет
+// мог быть уже переведён дальше по воркфлоу, откатывать его в неопределённое
+// состояние не наша забота.
+func (r *TicketsRepository) UnassignWithVersion(ctx context.Context, ticketID, assigneeID int64, expectedVersion int) error {
+	query := `
+		UPDATE tickets
+		SET assigned_to = NULL, assigned_at = NULL, version = version + 1, updated_at = NOW()
+		WHERE id = $1 AND assigned_to = $2 AND version = $3
+	`
+	exec := r.getExecutor(ctx)
+	result, err := exec.ExecContext(ctx, query, ticketID, assigneeID, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("failed to unassign ticket: %w", err)
+	}
+	return r.checkVersionedUpdate(ctx, result, ticketID)
+}
+
+// checkVersionedUpdate различает "тикета не существует" (ErrNotFound) от
+// "существует, но версия/владелец уже другие" (ErrOptimisticLockConflict) —
+// rowsAffected=0 сам по себе не говорит, какой из двух случаев произошёл.
+// Проверка идёт через r.db.conn (пул), а не getExecutor(ctx): строка тикета
+// уже существовала до начала этой транзакции (её создал не текущий вызов),
+// поэтому её видимость не зависит от того, через какое соединение читать.
+func (r *TicketsRepository) checkVersionedUpdate(ctx context.Context, result sql.Result, ticketID int64) error {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		var exists bool
+		if err := r.db.conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM tickets WHERE id = $1)", ticketID).Scan(&exists); err != nil {
+			return fmt.Errorf("failed to check ticket existence: %w", err)
+		}
+		if !exists {
+			return tickets.ErrNotFound
+		}
+		return tickets.ErrOptimisticLockConflict
+	}
+	return nil
+}
+
 // Delete удаляет тикет по ID
 func (r *TicketsRepository) Delete(ctx context.Context, id int64) error {
 	query := `DELETE FROM tickets WHERE id = $1`
@@ -238,6 +316,14 @@ func (r *TicketsRepository) List(ctx context.Context, filter tickets.ListFilter)
 	if filter.Priority != nil {
 		query += fmt.Sprintf(" AND priority_id = $%d", argPos)
 		args = append(args, int(*filter.Priority))
+		argPos++
+	}
+
+	if filter.Unassigned {
+		query += " AND assigned_to IS NULL"
+	} else if filter.AssignedTo != nil {
+		query += fmt.Sprintf(" AND assigned_to = $%d", argPos)
+		args = append(args, *filter.AssignedTo)
 		argPos++
 	}
 
@@ -354,6 +440,14 @@ func (r *TicketsRepository) ListWithCursor(
 		argPos++
 	}
 
+	if filter.Unassigned {
+		query += " AND assigned_to IS NULL"
+	} else if filter.AssignedTo != nil {
+		query += fmt.Sprintf(" AND assigned_to = $%d", argPos)
+		args = append(args, *filter.AssignedTo)
+		argPos++
+	}
+
 	if filter.Cursor != nil && *filter.Cursor != "" {
 		createdAt, id, err := tickets.DecodeCursor(*filter.Cursor)
 		if err != nil {
@@ -424,7 +518,7 @@ func reverseTicketList(list []domain.Ticket) {
 const ticketFullSelectColumns = `
 	t.id, t.user_id, t.status_id, t.priority_id, t.amount, t.comment,
 	t.response_deadline, t.resolution_deadline, t.first_response_at, t.resolved_at,
-	t.created_at, t.updated_at,
+	t.created_at, t.updated_at, t.assigned_to, t.version,
 	s.name, s.description,
 	tp.id, tp.external_id, tp.title, tp.description
 `
@@ -437,20 +531,23 @@ const ticketFullFromJoin = `
 
 // scanTicketFullRow сканирует строку JOIN-запроса (tickets + ticket_statuses +
 // ticket_topics) в domain.TicketFull и досчитывает SLA из уже прочитанных
-// дедлайнов — без дополнительных запросов к БД. Comments и Assignee сюда не
-// входят: это отдельные выборки (см. getTicketComments/getTicketAssignee),
-// вызывающая сторона решает, нужны ли они.
+// дедлайнов — без дополнительных запросов к БД. Assignee читается прямо из
+// t.assigned_to (Task 13) — раньше это был best-effort парсинг последней
+// записи ticket_history (см. историю getTicketAssignee), теперь есть
+// нормальная колонка. Comments сюда не входят: это отдельная выборка (см.
+// getTicketComments), вызывающая сторона решает, нужна ли она.
 func scanTicketFullRow(scanner interface {
 	Scan(dest ...any) error
 }) (domain.TicketFull, error) {
 	var full domain.TicketFull
 	var statusID, priorityID int
 	var responseDeadline, resolutionDeadline, firstResponseAt, resolvedAt sql.NullTime
+	var assignedTo sql.NullInt64
 
 	err := scanner.Scan(
 		&full.ID, &full.User.ID, &statusID, &priorityID, &full.Amount, &full.Comment,
 		&responseDeadline, &resolutionDeadline, &firstResponseAt, &resolvedAt,
-		&full.CreatedAt, &full.UpdatedAt,
+		&full.CreatedAt, &full.UpdatedAt, &assignedTo, &full.Version,
 		&full.Status.Name, &full.Status.DisplayName,
 		&full.Topic.ID, &full.Topic.ExternalID, &full.Topic.Title, &full.Topic.Description,
 	)
@@ -460,6 +557,9 @@ func scanTicketFullRow(scanner interface {
 
 	full.Status.ID = statusID
 	full.Priority = domain.Priority(priorityID)
+	if assignedTo.Valid {
+		full.Assignee = &domain.User{ID: assignedTo.Int64}
+	}
 
 	var responseDeadlineTime, resolutionDeadlineTime time.Time
 	if responseDeadline.Valid {
@@ -513,12 +613,6 @@ func (r *TicketsRepository) GetFullByID(ctx context.Context, id int64) (domain.T
 	}
 	full.Comments = comments
 
-	assignee, err := r.getTicketAssignee(ctx, id)
-	if err != nil {
-		return domain.TicketFull{}, err
-	}
-	full.Assignee = assignee
-
 	return full, nil
 }
 
@@ -552,6 +646,14 @@ func (r *TicketsRepository) ListFull(ctx context.Context, filter tickets.ListFil
 	if filter.Priority != nil {
 		query += fmt.Sprintf(" AND t.priority_id = $%d", argPos)
 		args = append(args, int(*filter.Priority))
+		argPos++
+	}
+
+	if filter.Unassigned {
+		query += " AND t.assigned_to IS NULL"
+	} else if filter.AssignedTo != nil {
+		query += fmt.Sprintf(" AND t.assigned_to = $%d", argPos)
+		args = append(args, *filter.AssignedTo)
 		argPos++
 	}
 
@@ -648,40 +750,6 @@ func (r *TicketsRepository) getTicketComments(ctx context.Context, ticketID int6
 	}
 
 	return comments, nil
-}
-
-// getTicketAssignee возвращает оператора, назначенного на тикет — либо nil,
-// если тикет не назначен. ВАЖНО: в схеме БД нет отдельной колонки
-// assigned_to/operator_id — единственный след назначения оператора живёт в
-// ticket_history как action=assigned с new_value вида "operator=<id>" (см.
-// HistoryHandler.HandleTicketAssigned в app/tickets/event_handlers.go).
-// Поэтому assignee здесь — best-effort парсинг последней такой записи, а не
-// чтение нормальной колонки. Осознанный компромисс, чтобы не тащить в Task 9
-// (версионирование API) миграцию схемы и ripple по Create/Update/scanTicket.
-func (r *TicketsRepository) getTicketAssignee(ctx context.Context, ticketID int64) (*domain.User, error) {
-	query := `
-		SELECT new_value
-		FROM ticket_history
-		WHERE ticket_id = $1 AND action = $2
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
-
-	var newValue string
-	err := r.db.conn.QueryRowContext(ctx, query, ticketID, string(domain.ActionAssigned)).Scan(&newValue)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to get ticket assignee: %w", err)
-	}
-
-	var operatorID int64
-	if _, scanErr := fmt.Sscanf(newValue, "operator=%d", &operatorID); scanErr != nil {
-		return nil, nil
-	}
-
-	return &domain.User{ID: operatorID}, nil
 }
 
 // AddHistory добавляет запись в историю тикета

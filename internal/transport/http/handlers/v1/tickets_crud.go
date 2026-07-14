@@ -167,15 +167,29 @@ func (h *TicketsHandler) listTickets(c *fiber.Ctx) error {
 		priority = &p
 	}
 
+	var assignedTo *int64
+	unassigned := c.QueryBool("unassigned", false)
+	if !unassigned {
+		if assignedToStr := c.Query("assignedTo"); assignedToStr != "" {
+			val, err := strconv.ParseInt(assignedToStr, 10, 64)
+			if err != nil {
+				return fiber.NewError(fiber.StatusBadRequest, "invalid assignedTo parameter")
+			}
+			assignedTo = &val
+		}
+	}
+
 	input := tickets.ListTicketsInput{
-		UserID:   userID,
-		TopicID:  topicID,
-		Status:   status,
-		Priority: priority,
-		Limit:    limit,
-		Offset:   offset,
-		SortBy:   c.Query("sortBy", "created_at"),
-		SortDesc: c.QueryBool("sortDesc", true),
+		UserID:     userID,
+		TopicID:    topicID,
+		Status:     status,
+		Priority:   priority,
+		Limit:      limit,
+		Offset:     offset,
+		SortBy:     c.Query("sortBy", "created_at"),
+		SortDesc:   c.QueryBool("sortDesc", true),
+		AssignedTo: assignedTo,
+		Unassigned: unassigned,
 	}
 
 	ticketList, err := h.service.ListTickets(c.Context(), input)

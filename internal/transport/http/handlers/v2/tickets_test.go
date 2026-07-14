@@ -122,8 +122,12 @@ func (m *mockTicketsService) CloseTicket(ctx context.Context, input tickets.Clos
 	return domain.Ticket{}, errors.New("not implemented")
 }
 
-func (m *mockTicketsService) AssignTicket(ctx context.Context, input tickets.AssignTicketInput) (domain.Ticket, error) {
-	return domain.Ticket{}, errors.New("not implemented")
+func (m *mockTicketsService) AssignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	return errors.New("not implemented")
+}
+
+func (m *mockTicketsService) UnassignTicket(ctx context.Context, ticketID, assigneeID int64) error {
+	return errors.New("not implemented")
 }
 
 func testLogger() zerolog.Logger {

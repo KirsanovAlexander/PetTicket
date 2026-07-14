@@ -11,13 +11,15 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// AssignTicketRequest запрос на назначение тикета оператору
+// AssignTicketRequest запрос на самоназначение тикета — саппорт берёт
+// свободный тикет в работу на себя.
 type AssignTicketRequest struct {
-	OperatorID int64  `json:"operatorId" validate:"required,gte=1"`
-	Comment    string `json:"comment,omitempty" validate:"omitempty,max=500"`
+	AssigneeID int64 `json:"assigneeId" validate:"required,gte=1"`
 }
 
-// assignTicket назначает тикет на оператора (бизнес-логика)
+// assignTicket назначает тикет на саппорта. Идемпотентно, конкурентно-
+// безопасно (optimistic locking внутри Service.AssignTicket) — при гонке
+// нескольких запросов ровно один получает 200, остальные 409.
 func (h *TicketsHandler) assignTicket(c *fiber.Ctx) error {
 	ticketID, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
@@ -28,39 +30,71 @@ func (h *TicketsHandler) assignTicket(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 	}
+	if req.AssigneeID <= 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "assigneeId is required")
+	}
 
-	// Получаем текущий userID из контекста (установлен AuthMiddleware)
-	userID := c.Locals("userID").(int64)
-
-	// Бизнес-правило "тикет ещё не назначен" и сам перевод в in_progress
-	// теперь внутри Service.AssignTicket — оно же публикует ticket.assigned
-	// (и, транзитивно через UpdateTicket, ticket.status_changed/ticket.comment_added).
-	updated, err := h.service.AssignTicket(c.Context(), tickets.AssignTicketInput{
-		TicketID:   ticketID,
-		OperatorID: req.OperatorID,
-		AssignedBy: userID,
-		Comment:    req.Comment,
-	})
-	if err != nil {
-		if errors.Is(err, tickets.ErrConflict) {
-			return fiber.NewError(fiber.StatusConflict, "ticket already assigned or in progress")
+	if err := h.service.AssignTicket(c.Context(), ticketID, req.AssigneeID); err != nil {
+		// Для "уже назначен" отдаём вместе с 409 то, кто именно и когда
+		// успел раньше — клиент может показать осмысленное сообщение
+		// ("уже взято в работу оператором N в 10:15") вместо голого кода
+		// ошибки. Остальные ошибки уходят как есть в централизованный
+		// ErrorHandler (error_handler.go) — им такое обогащение не нужно.
+		if errors.Is(err, tickets.ErrTicketAlreadyAssigned) {
+			if current, getErr := h.service.GetTicket(c.Context(), ticketID); getErr == nil {
+				requestID := ""
+				if rid := c.Locals("requestId"); rid != nil {
+					requestID, _ = rid.(string)
+				}
+				return c.Status(fiber.StatusConflict).JSON(dto.ErrorResponse{
+					Error: dto.ErrorDetail{
+						Code:      "TICKET_ALREADY_ASSIGNED",
+						Message:   "ticket already assigned",
+						RequestID: requestID,
+						Details: map[string]any{
+							"assignedTo": current.AssignedTo,
+							"assignedAt": current.AssignedAt,
+						},
+					},
+				})
+			}
 		}
 		return err
 	}
 
-	// Логируем назначение
+	updated, err := h.service.GetTicket(c.Context(), ticketID)
+	if err != nil {
+		return err
+	}
+
 	h.logger.Info().
 		Int64("ticketId", ticketID).
-		Int64("operatorId", req.OperatorID).
-		Int64("assignedBy", userID).
-		Msg("ticket assigned to operator")
+		Int64("assigneeId", req.AssigneeID).
+		Msg("ticket assigned")
 
-	resp := dto.ToTicketResponse(updated)
-	return c.JSON(fiber.Map{
-		"ticket":     resp,
-		"operatorId": req.OperatorID,
-		"message":    "ticket successfully assigned",
-	})
+	return c.JSON(dto.ToTicketResponse(updated))
+}
+
+// unassignTicket снимает назначение с тикета. Снять может только текущий
+// владелец (X-User-ID) — иначе 403.
+func (h *TicketsHandler) unassignTicket(c *fiber.Ctx) error {
+	ticketID, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid ticket id")
+	}
+
+	userID := c.Locals("userID").(int64)
+
+	if err := h.service.UnassignTicket(c.Context(), ticketID, userID); err != nil {
+		return err
+	}
+
+	h.logger.Info().
+		Int64("ticketId", ticketID).
+		Int64("userId", userID).
+		Msg("ticket unassigned")
+
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // escalateTicket повышает приоритет тикета на один уровень

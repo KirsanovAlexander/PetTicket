@@ -73,6 +73,7 @@ func (h *TicketsHandler) RegisterRoutes(api fiber.Router) {
 	ticketsGroup.Post("/:id/comments", mw.ValidateBody[AddCommentRequest](), h.addComment)
 
 	// Бизнес-логика
-	ticketsGroup.Post("/:id/assign", h.assignTicket)     // Назначить тикет на оператора
+	ticketsGroup.Post("/:id/assign", h.assignTicket)     // Взять тикет в работу (self-assign)
+	ticketsGroup.Post("/:id/unassign", h.unassignTicket) // Снять назначение (только владелец)
 	ticketsGroup.Post("/:id/escalate", h.escalateTicket) // Эскалация тикета
 }
