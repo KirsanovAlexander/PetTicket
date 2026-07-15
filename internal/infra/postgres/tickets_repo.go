@@ -142,6 +142,7 @@ func (r *TicketsRepository) Create(ctx context.Context, ticket domain.Ticket) (d
 		return domain.Ticket{}, fmt.Errorf("failed to create ticket: %w", err)
 	}
 
+	ticket.Priority = priority
 	return ticket, nil
 }
 

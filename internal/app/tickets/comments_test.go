@@ -78,6 +78,7 @@ func TestAddComment_DualWrite_CreatesInNewStoreAndLegacyField(t *testing.T) {
 			updatedTicket = ticket
 			return ticket, nil
 		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error { return nil },
 	}
 	comments := &mockCommentsRepository{}
 	svc := NewService(repo, comments, &mockDB{}, testLogger(), nil, nil, false)
@@ -103,8 +104,9 @@ func TestAddComment_DualWrite_CreatesInNewStoreAndLegacyField(t *testing.T) {
 func TestAddComment_PublicComment_SetsFirstResponse(t *testing.T) {
 	existing := ticketForComments()
 	repo := &mockRepository{
-		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existing, nil },
-		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+		getByIDFunc:    func(ctx context.Context, id int64) (domain.Ticket, error) { return existing, nil },
+		updateFunc:     func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+		addHistoryFunc: func(ctx context.Context, history domain.History) error { return nil },
 	}
 	svc := NewService(repo, &mockCommentsRepository{}, &mockDB{}, testLogger(), nil, nil, false)
 
@@ -122,8 +124,9 @@ func TestAddComment_PublicComment_SetsFirstResponse(t *testing.T) {
 func TestAddComment_InternalNote_DoesNotSetFirstResponse(t *testing.T) {
 	existing := ticketForComments()
 	repo := &mockRepository{
-		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existing, nil },
-		updateFunc:  func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+		getByIDFunc:    func(ctx context.Context, id int64) (domain.Ticket, error) { return existing, nil },
+		updateFunc:     func(ctx context.Context, ticket domain.Ticket) (domain.Ticket, error) { return ticket, nil },
+		addHistoryFunc: func(ctx context.Context, history domain.History) error { return nil },
 	}
 	svc := NewService(repo, &mockCommentsRepository{}, &mockDB{}, testLogger(), nil, nil, false)
 
@@ -148,6 +151,7 @@ func TestAddComment_InternalNote_UpdatesUserActivity(t *testing.T) {
 			activityUpdated = true
 			return nil
 		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error { return nil },
 	}
 	svc := NewService(repo, &mockCommentsRepository{}, &mockDB{}, testLogger(), nil, nil, false)
 
@@ -172,6 +176,7 @@ func TestAddComment_PublicComment_DoesNotUpdateUserActivity(t *testing.T) {
 			activityUpdated = true
 			return nil
 		},
+		addHistoryFunc: func(ctx context.Context, history domain.History) error { return nil },
 	}
 	svc := NewService(repo, &mockCommentsRepository{}, &mockDB{}, testLogger(), nil, nil, false)
 

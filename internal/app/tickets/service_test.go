@@ -492,11 +492,12 @@ func TestUpdateTicket_StatusChange(t *testing.T) {
 // публикуется ПОСЛЕ коммита, с корректными OldStatus/NewStatus/ChangedBy.
 func TestUpdateTicket_PublishesStatusChangedEvent(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Original comment",
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityLow,
+		Comment:  "Original comment",
 	}
 
 	repo := &mockRepository{
@@ -535,11 +536,12 @@ func TestUpdateTicket_PublishesStatusChangedEvent(t *testing.T) {
 // дополнительную запись с action=resolved.
 func TestUpdateTicket_PublishesStatusChangedEvent_ResolvedFlag(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "Original comment",
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityLow,
+		Comment:  "Original comment",
 	}
 
 	repo := &mockRepository{
@@ -567,11 +569,12 @@ func TestUpdateTicket_PublishesStatusChangedEvent_ResolvedFlag(t *testing.T) {
 // событие публикуется с OldComment/NewComment.
 func TestUpdateTicket_PublishesCommentAddedEvent(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID:      1,
-		UserID:  100,
-		TopicID: 1,
-		Status:  domain.StatusNew,
-		Comment: "old comment",
+		ID:       1,
+		UserID:   100,
+		TopicID:  1,
+		Status:   domain.StatusNew,
+		Priority: domain.PriorityLow,
+		Comment:  "old comment",
 	}
 
 	repo := &mockRepository{
@@ -604,7 +607,7 @@ func TestUpdateTicket_PublishesCommentAddedEvent(t *testing.T) {
 // TestUpdateTicket_NoEventsWhenNothingChanges — UpdateTicket без Status и
 // Comment не публикует ни одного события.
 func TestUpdateTicket_NoEventsWhenNothingChanges(t *testing.T) {
-	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "x"}
+	existingTicket := domain.Ticket{ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "x"}
 
 	repo := &mockRepository{
 		getByIDFunc: func(ctx context.Context, id int64) (domain.Ticket, error) { return existingTicket, nil },

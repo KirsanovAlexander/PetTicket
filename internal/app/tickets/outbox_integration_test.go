@@ -39,7 +39,7 @@ func (m *mockOutboxRepository) Update(ctx context.Context, entry notifications.O
 
 func TestUpdateTicket_CreatesOutboxEntryOnStatusChange(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "Original comment",
+		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "Original comment",
 	}
 
 	repo := &mockRepository{
@@ -77,7 +77,7 @@ func TestUpdateTicket_CreatesOutboxEntryOnStatusChange(t *testing.T) {
 
 func TestUpdateTicket_NoOutboxEntryWhenStatusUnchanged(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "Original comment",
+		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "Original comment",
 	}
 
 	repo := &mockRepository{
@@ -99,7 +99,7 @@ func TestUpdateTicket_NoOutboxEntryWhenStatusUnchanged(t *testing.T) {
 
 func TestUpdateTicket_NilOutboxRepo_DoesNotPanic(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "Original comment",
+		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "Original comment",
 	}
 
 	repo := &mockRepository{
@@ -116,7 +116,7 @@ func TestUpdateTicket_NilOutboxRepo_DoesNotPanic(t *testing.T) {
 
 func TestUpdateTicket_OutboxCreateFailure_RollsBackTransaction(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "Original comment",
+		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "Original comment",
 	}
 
 	rolledBack := false
@@ -158,7 +158,7 @@ func TestUpdateTicket_OutboxCreateFailure_RollsBackTransaction(t *testing.T) {
 // действительно используется в этом флоу.
 func TestUpdateTicket_OutboxEntryUsesTxContext(t *testing.T) {
 	existingTicket := domain.Ticket{
-		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Comment: "Original comment",
+		ID: 1, UserID: 100, TopicID: 1, Status: domain.StatusNew, Priority: domain.PriorityLow, Comment: "Original comment",
 	}
 
 	repo := &mockRepository{

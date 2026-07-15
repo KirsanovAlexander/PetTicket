@@ -43,8 +43,10 @@ func TestListTicketsWithCursor_Success(t *testing.T) {
 	if decodedID != item2.ID {
 		t.Errorf("expected NextCursor built from last item (id=%d), got id=%d", item2.ID, decodedID)
 	}
-	if !decodedTime.Equal(item2.CreatedAt) {
-		t.Errorf("expected NextCursor time %v, got %v", item2.CreatedAt, decodedTime)
+	// Cursor хранит время с точностью до миллисекунды (см. EncodeCursor),
+	// поэтому сравниваем с округлением, а не наносекунду в наносекунду.
+	if !decodedTime.Equal(item2.CreatedAt.Truncate(time.Millisecond)) {
+		t.Errorf("expected NextCursor time %v, got %v", item2.CreatedAt.Truncate(time.Millisecond), decodedTime)
 	}
 
 	// Дефолты: PageSize и Direction подставляются сервисом
